@@ -646,46 +646,28 @@
         <p>한국투자증권 KIS API 연동 | 환전: 월 1회(A방식) | 수수료: 0.25%</p>
     </div>
 
-   <script>
+  <script>
   // API 엔드포인트
   const API_URL = '/api/kis';
+  const TELEGRAM_API = '/api/telegram';
   
-  // 실시간 데이터 로드
-  async function loadPortfolioData() {
-    try {
-      const response = await fetch(API_URL);
-      const data = await response.json();
-      
-      if (data.ok && data.portfolio) {
-        updateDashboard(data.portfolio, data.signals);
-      }
-    } catch (error) {
-      console.error('API Error:', error);
-    }
-  }
-  
-  // 대시보드 업데이트
-  function updateDashboard(portfolio, signals) {
-    // 포트폴리오 데이터 업데이트 (예시)
-    if (portfolio.output2) {
-      const totalValue = portfolio.output2[0]?.tot_evlu_amt || '조회 중...';
-      document.querySelector('.summary-value')?.innerText = totalValue;
-    }
-    
-    // 신호 업데이트
-    if (signals && signals.length > 0) {
-      signals.forEach(signal => {
-        console.log(`🚨 신호: ${signal.message}`);
-        // 텔레그램 알림 전송
-        sendSignalAlert(signal);
+  // 최종 승인 함수 (중요!)
+  function finalApproval(action) {
+    if (action === 'approve') {
+      alert('✅ 승인 완료!');
+      sendSignalAlert({
+        ticker: 'TQQQ',
+        type: '익절',
+        rate: 17.7,
+        message: 'TQQQ 익절 신호'
       });
     }
   }
   
-  // 텔레그램 알림 전송
+  // 신호 알림 전송
   async function sendSignalAlert(signal) {
     try {
-      await fetch('/api/telegram', {
+      const response = await fetch(TELEGRAM_API, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -693,14 +675,9 @@
           data: signal
         })
       });
+      console.log('Telegram response:', response);
     } catch (error) {
       console.error('Telegram Error:', error);
     }
   }
-  
-  // 페이지 로드 시 데이터 조회
-  loadPortfolioData();
-  
-  // 매 5분마다 자동 새로고침
-  setInterval(loadPortfolioData, 5 * 60 * 1000);
 </script>
