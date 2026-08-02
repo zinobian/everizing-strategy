@@ -647,37 +647,51 @@
     </div>
 
   <script>
-  // API 엔드포인트
-  const API_URL = '/api/kis';
-  const TELEGRAM_API = '/api/telegram';
-  
-  // 최종 승인 함수 (중요!)
+  // 최종 승인 함수 (반드시 필요!)
   function finalApproval(action) {
     if (action === 'approve') {
-      alert('✅ 승인 완료!');
-      sendSignalAlert({
-        ticker: 'TQQQ',
-        type: '익절',
-        rate: 17.7,
-        message: 'TQQQ 익절 신호'
-      });
-    }
-  }
-  
-  // 신호 알림 전송
-  async function sendSignalAlert(signal) {
-    try {
-      const response = await fetch(TELEGRAM_API, {
+      alert('✅ 승인 완료!\n\nTQQQ 규칙1 매도 신호가 승인되었습니다.');
+      
+      // 텔레그램 알림 전송
+      fetch('/api/telegram', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           type: 'signal',
-          data: signal
+          data: {
+            ticker: 'TQQQ',
+            type: '익절',
+            rate: 17.7,
+            message: 'TQQQ 익절 신호: 수익률 17.70%'
+          }
         })
-      });
-      console.log('Telegram response:', response);
-    } catch (error) {
-      console.error('Telegram Error:', error);
+      }).then(r => console.log('Telegram sent:', r))
+        .catch(e => console.error('Error:', e));
+    } else if (action === 'modify') {
+      alert('✏️ 수정 모드로 진입합니다.');
+    } else {
+      alert('✗ 신호가 거부되었습니다.');
     }
+  }
+  
+  // 다른 버튼 함수들
+  function executeSignal(ticker) {
+    alert(`✓ [${ticker}] 매도 신호 승인됨`);
+  }
+  
+  function modifySignal(ticker) {
+    alert(`✏️ [${ticker}] 수정하기`);
+  }
+  
+  function skipSignal(ticker) {
+    alert(`⏭️ [${ticker}] 내일로 연기`);
+  }
+  
+  function confirmUnderstand(ticker) {
+    alert(`✓ [${ticker}] 확인되었습니다.`);
+  }
+  
+  function resetCounter(ticker) {
+    alert(`🔄 [${ticker}] 손절 해제`);
   }
 </script>
