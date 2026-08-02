@@ -1,0 +1,680 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>에버라이징 투자 대시보드</title>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.5.0/dist/chart.umd.js"></script>
+    <style>
+        :root {
+            --primary: #2563eb;
+            --success: #16a34a;
+            --warning: #ea580c;
+            --danger: #dc2626;
+            --bg-light: #f8fafc;
+            --border: #e2e8f0;
+            color-scheme: light;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: var(--bg-light);
+            color: #1e293b;
+            line-height: 1.6;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: white;
+            border-bottom: 2px solid var(--border);
+            padding: 20px 0;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            font-size: 28px;
+            margin-bottom: 10px;
+            color: var(--primary);
+        }
+
+        .header-info {
+            display: flex;
+            gap: 30px;
+            font-size: 14px;
+            color: #64748b;
+        }
+
+        .header-info div {
+            display: flex;
+            gap: 5px;
+        }
+
+        .header-info strong {
+            color: #1e293b;
+        }
+
+        .refresh-btn {
+            background: var(--primary);
+            color: white;
+            border: none;
+            padding: 8px 16px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            margin-top: 10px;
+        }
+
+        .refresh-btn:hover {
+            background: #1d4ed8;
+        }
+
+        .dashboard-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 16px;
+            margin-bottom: 30px;
+        }
+
+        .card {
+            background: white;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            padding: 16px;
+            box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+        }
+
+        .card-header {
+            font-weight: 600;
+            margin-bottom: 12px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border);
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .card-title {
+            font-size: 16px;
+            color: var(--primary);
+        }
+
+        .card-value {
+            font-size: 24px;
+            font-weight: 700;
+            color: #1e293b;
+            margin: 8px 0;
+        }
+
+        .card-subtitle {
+            font-size: 12px;
+            color: #64748b;
+            margin-top: 4px;
+        }
+
+        .status-badge {
+            display: inline-block;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+        }
+
+        .badge-green {
+            background: #dcfce7;
+            color: #166534;
+        }
+
+        .badge-red {
+            background: #fee2e2;
+            color: #991b1b;
+        }
+
+        .badge-yellow {
+            background: #fef3c7;
+            color: #92400e;
+        }
+
+        .table-responsive {
+            overflow-x: auto;
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            font-size: 13px;
+        }
+
+        th {
+            background: var(--bg-light);
+            padding: 12px;
+            text-align: left;
+            font-weight: 600;
+            border-bottom: 2px solid var(--border);
+            color: #475569;
+        }
+
+        td {
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        tr:hover {
+            background: var(--bg-light);
+        }
+
+        .ticker {
+            font-weight: 600;
+            color: var(--primary);
+        }
+
+        .positive {
+            color: var(--success);
+            font-weight: 600;
+        }
+
+        .negative {
+            color: var(--danger);
+            font-weight: 600;
+        }
+
+        .signal-row {
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            font-size: 12px;
+        }
+
+        .signal-icon {
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: bold;
+            color: white;
+            font-size: 10px;
+        }
+
+        .signal-ok {
+            background: var(--success);
+        }
+
+        .signal-warning {
+            background: var(--warning);
+        }
+
+        .signal-alert {
+            background: var(--danger);
+        }
+
+        .tab-buttons {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 16px;
+            border-bottom: 1px solid var(--border);
+        }
+
+        .tab-btn {
+            padding: 12px 16px;
+            border: none;
+            background: none;
+            cursor: pointer;
+            font-size: 14px;
+            font-weight: 600;
+            color: #64748b;
+            border-bottom: 3px solid transparent;
+            transition: all 0.2s;
+        }
+
+        .tab-btn.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+        }
+
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .checklist {
+            list-style: none;
+        }
+
+        .checklist-item {
+            padding: 10px;
+            margin-bottom: 8px;
+            background: var(--bg-light);
+            border-radius: 4px;
+            display: flex;
+            gap: 8px;
+            align-items: flex-start;
+            font-size: 13px;
+        }
+
+        .checklist-item input[type="checkbox"] {
+            margin-top: 2px;
+            cursor: pointer;
+        }
+
+        .checklist-label {
+            flex: 1;
+        }
+
+        .checklist-status {
+            font-size: 11px;
+            color: #64748b;
+        }
+
+        .hosted-lot {
+            background: #f0f9ff;
+            border-left: 3px solid var(--primary);
+            padding: 12px;
+            margin-bottom: 8px;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .hosted-lot-header {
+            font-weight: 600;
+            color: var(--primary);
+            margin-bottom: 6px;
+        }
+
+        .hosted-lot-info {
+            display: grid;
+            grid-template-columns: repeat(2, 1fr);
+            gap: 8px;
+            color: #64748b;
+        }
+
+        .hosted-lot-item {
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .info-badge {
+            display: inline-block;
+            padding: 2px 8px;
+            background: var(--primary);
+            color: white;
+            border-radius: 3px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .footer {
+            text-align: center;
+            padding: 20px;
+            color: #64748b;
+            font-size: 12px;
+            border-top: 1px solid var(--border);
+            margin-top: 30px;
+        }
+
+        .two-column {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 16px;
+        }
+
+        @media (max-width: 1024px) {
+            .two-column {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <div class="container">
+            <h1>📊 에버라이징 투자 대시보드</h1>
+            <div class="header-info">
+                <div><strong>오늘:</strong> <span id="today-date">2026-08-02</span></div>
+                <div><strong>환율:</strong> <span id="exchange-rate">1,350</span>원/USD</div>
+                <div><strong>포트폴리오:</strong> <span id="total-value">12,500,000</span>원</div>
+                <div><strong>총수익률:</strong> <span id="total-return" class="positive">+8.5%</span></div>
+            </div>
+            <button class="refresh-btn" onclick="refreshData()">🔄 새로고침</button>
+        </div>
+    </div>
+
+    <div class="container">
+        <!-- 포트폴리오 요약 -->
+        <div class="dashboard-grid">
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">포트폴리오 평가액</span>
+                </div>
+                <div class="card-value">12,500,000원</div>
+                <div class="card-subtitle">투입 누적: 10,500,000원 | 평가수익: +1,900,000원</div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">메인 7종목</span>
+                </div>
+                <div class="card-value">11,200,000원</div>
+                <div class="card-subtitle">정액매수 진행 중 | 활성 포지션: 7개</div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <span class="card-title">캐쉬파킹 (TECL)</span>
+                </div>
+                <div class="card-value">1,300,000원</div>
+                <div class="card-subtitle">매도금 잔여액 | 수익: +120,000원</div>
+            </div>
+        </div>
+
+        <!-- 탭 네비게이션 -->
+        <div class="card">
+            <div class="tab-buttons">
+                <button class="tab-btn active" onclick="switchTab('portfolio')">📈 포트폴리오</button>
+                <button class="tab-btn" onclick="switchTab('signals')">🎯 매매신호</button>
+                <button class="tab-btn" onclick="switchTab('hosted')">💰 대여랏</button>
+                <button class="tab-btn" onclick="switchTab('checklist')">✅ 오늘 체크리스트</button>
+            </div>
+
+            <!-- 포트폴리오 탭 -->
+            <div id="portfolio-tab" class="tab-content active">
+                <div class="table-responsive">
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>종목</th>
+                                <th>현재가</th>
+                                <th>평단가</th>
+                                <th>보유수량</th>
+                                <th>평가금액</th>
+                                <th>평가손익</th>
+                                <th>수익률</th>
+                                <th>상태</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><span class="ticker">TQQQ</span></td>
+                                <td>115.50</td>
+                                <td>98.20</td>
+                                <td>30</td>
+                                <td>3,465,000원</td>
+                                <td class="positive">+520,000원</td>
+                                <td class="positive">+17.7%</td>
+                                <td><span class="status-badge badge-green">규칙1 대기</span></td>
+                            </tr>
+                            <tr>
+                                <td><span class="ticker">SOXL</span></td>
+                                <td>185.30</td>
+                                <td>175.50</td>
+                                <td>25</td>
+                                <td>4,632,500원</td>
+                                <td class="positive">+245,000원</td>
+                                <td class="positive">+5.6%</td>
+                                <td><span class="status-badge badge-yellow">신고가 무장</span></td>
+                            </tr>
+                            <tr>
+                                <td><span class="ticker">GDXU</span></td>
+                                <td>92.30</td>
+                                <td>100.10</td>
+                                <td>20</td>
+                                <td>1,846,000원</td>
+                                <td class="negative">-156,000원</td>
+                                <td class="negative">-7.8%</td>
+                                <td><span class="status-badge badge-red">손절 카운트 8일</span></td>
+                            </tr>
+                            <tr>
+                                <td><span class="ticker">AGQ</span></td>
+                                <td>48.75</td>
+                                <td>45.30</td>
+                                <td>40</td>
+                                <td>1,950,000원</td>
+                                <td class="positive">+138,000원</td>
+                                <td class="positive">+7.6%</td>
+                                <td><span class="status-badge badge-green">정상</span></td>
+                            </tr>
+                            <tr>
+                                <td><span class="ticker">DFEN</span></td>
+                                <td>28.45</td>
+                                <td>26.80</td>
+                                <td>15</td>
+                                <td>426,750원</td>
+                                <td class="positive">+24,750원</td>
+                                <td class="positive">+6.2%</td>
+                                <td><span class="status-badge badge-green">정상</span></td>
+                            </tr>
+                            <tr>
+                                <td><span class="ticker">UTSL</span></td>
+                                <td>35.20</td>
+                                <td>33.50</td>
+                                <td>12</td>
+                                <td>422,400원</td>
+                                <td class="positive">+20,400원</td>
+                                <td class="positive">+5.1%</td>
+                                <td><span class="status-badge badge-green">정상</span></td>
+                            </tr>
+                            <tr>
+                                <td><span class="ticker">UBOT</span></td>
+                                <td>52.10</td>
+                                <td>49.75</td>
+                                <td>10</td>
+                                <td>521,000원</td>
+                                <td class="positive">+23,500원</td>
+                                <td class="positive">+4.7%</td>
+                                <td><span class="status-badge badge-green">정상</span></td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+
+            <!-- 매매신호 탭 -->
+            <div id="signals-tab" class="tab-content">
+                <div style="display: grid; gap: 12px;">
+                    <div style="padding: 12px; background: #dcfce7; border-radius: 4px; border-left: 3px solid var(--success);">
+                        <div style="font-weight: 600; color: var(--success); margin-bottom: 6px;">✅ TQQQ - 규칙1 (코스트 에버리징)</div>
+                        <div style="font-size: 12px; color: #166534;">
+                            현재가 115.50 > 평단가 98.20 × 1.15 = 113.00<br>
+                            <strong>조건 충족: 매도 신호 발생 ✓</strong><br>
+                            예상 매도금: 약 3,465,000원<br>
+                            재투자 스케줄: 15거래일에 걸쳐 분할 매수
+                        </div>
+                    </div>
+
+                    <div style="padding: 12px; background: #fef3c7; border-radius: 4px; border-left: 3px solid var(--warning);">
+                        <div style="font-weight: 600; color: #92400e; margin-bottom: 6px;">⚠️ GDXU - 규칙3 (손절 진행)</div>
+                        <div style="font-size: 12px; color: #78350f;">
+                            현재가 92.30 < 240일선 95.00<br>
+                            <strong>카운트: 8/10일</strong><br>
+                            남은 기간: 2거래일<br>
+                            주의: 내일 또 하회하면 모레 손절 예정
+                        </div>
+                    </div>
+
+                    <div style="padding: 12px; background: #dbeafe; border-radius: 4px; border-left: 3px solid var(--primary);">
+                        <div style="font-weight: 600; color: #1e40af; margin-bottom: 6px;">ℹ️ SOXL - 규칙4 (신고가 모니터링)</div>
+                        <div style="font-size: 12px; color: #1e3a8a;">
+                            신고가 무장: ON (사상 최고 경신)<br>
+                            35일선: 180.50 | 현재가: 185.30<br>
+                            상태: 35일선 위에서 안전<br>
+                            조건: 아래로 내려가면 매도
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 대여랏 탭 -->
+            <div id="hosted-tab" class="tab-content">
+                <div style="margin-bottom: 16px;">
+                    <h3 style="margin-bottom: 12px; color: var(--primary);">활성 대여랏</h3>
+
+                    <div class="hosted-lot">
+                        <div class="hosted-lot-header">TQQQ → AGQ (Origin: TQQQ, Host: AGQ)</div>
+                        <div class="hosted-lot-info">
+                            <div class="hosted-lot-item">
+                                <span>원금:</span>
+                                <strong>1,000,000원</strong>
+                            </div>
+                            <div class="hosted-lot-item">
+                                <span>나이:</span>
+                                <strong>72거래일 <span class="info-badge">아직 정산 안함</span></strong>
+                            </div>
+                            <div class="hosted-lot-item">
+                                <span>시가평가액:</span>
+                                <strong class="positive">1,080,000원 (+8.0%)</strong>
+                            </div>
+                            <div class="hosted-lot-item">
+                                <span>정산까지:</span>
+                                <strong>8일 (80일선)</strong>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="hosted-lot">
+                        <div class="hosted-lot-header">SOXL → DFEN (Origin: SOXL, Host: DFEN)</div>
+                        <div class="hosted-lot-info">
+                            <div class="hosted-lot-item">
+                                <span>원금:</span>
+                                <strong>800,000원</strong>
+                            </div>
+                            <div class="hosted-lot-item">
+                                <span>나이:</span>
+                                <strong>81거래일 <span class="info-badge" style="background: var(--warning);">정산 대기중</span></strong>
+                            </div>
+                            <div class="hosted-lot-item">
+                                <span>시가평가액:</span>
+                                <strong class="positive">805,000원 (+0.6%)</strong>
+                            </div>
+                            <div class="hosted-lot-item">
+                                <span>상태:</span>
+                                <strong>원금 회복 ✓ → 내일부터 정산 시작</strong>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <div>
+                    <h3 style="margin-bottom: 12px; color: var(--primary);">정산 완료된 대여랏</h3>
+                    <div style="background: var(--bg-light); padding: 12px; border-radius: 4px; font-size: 12px;">
+                        <div style="margin-bottom: 8px;">
+                            <strong>GDXU → UTSL</strong> (2026-07-15 정산 완료)<br>
+                            원금 회수: 750,000원 | 호스트 흡수 (수익): 42,000원
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- 체크리스트 탭 -->
+            <div id="checklist-tab" class="tab-content">
+                <h3 style="margin-bottom: 12px; color: var(--primary);">📋 오늘 장 마감 후 실행 사항</h3>
+
+                <ul class="checklist">
+                    <li class="checklist-item">
+                        <input type="checkbox" id="check1">
+                        <div class="checklist-label">
+                            <label for="check1"><strong>Step 1: 데이터 수집</strong><br>환율, 7종목 종가 확인</label>
+                            <div class="checklist-status">✓ 완료 (환율: 1,350원, 모든 종가 수신됨)</div>
+                        </div>
+                    </li>
+
+                    <li class="checklist-item">
+                        <input type="checkbox" id="check2">
+                        <div class="checklist-label">
+                            <label for="check2"><strong>Step 2: 정액매수 실행</strong><br>7종목 각각 매수</label>
+                            <div class="checklist-status">✓ 완료 (총 140,000원 = USD ~$103.7)</div>
+                        </div>
+                    </li>
+
+                    <li class="checklist-item">
+                        <input type="checkbox" id="check3">
+                        <div class="checklist-label">
+                            <label for="check3"><strong>Step 3: 재투자 스케줄</strong><br>TQQQ(1일 남음), SOXL(3일 남음) 실행</label>
+                            <div class="checklist-status">✓ 완료 (계획대로 진행중)</div>
+                        </div>
+                    </li>
+
+                    <li class="checklist-item">
+                        <input type="checkbox" id="check4">
+                        <div class="checklist-label">
+                            <label for="check4"><strong>Step 4: 대여랏 관리</strong><br>나이 증가, 정산 체크</label>
+                            <div class="checklist-status">✓ 완료 (SOXL→DFEN 정산 대기)</div>
+                        </div>
+                    </li>
+
+                    <li class="checklist-item">
+                        <input type="checkbox" id="check5" checked>
+                        <div class="checklist-label">
+                            <label for="check5"><strong>Step 5: 매도 신호 확인</strong><br>규칙1~4 판정</label>
+                            <div class="checklist-status">🚨 <strong>조치 필요: TQQQ 규칙1 신호</strong></div>
+                        </div>
+                    </li>
+
+                    <li class="checklist-item">
+                        <input type="checkbox" id="check6">
+                        <div class="checklist-label">
+                            <label for="check6"><strong>Step 6: 일일 평가금액 기록</strong><br>포트폴리오 평가액 저장</label>
+                            <div class="checklist-status">12,500,000원 (수익: +1,900,000원)</div>
+                        </div>
+                    </li>
+                </ul>
+
+                <div style="margin-top: 20px; padding: 16px; background: #fef3c7; border-radius: 4px; border-left: 3px solid var(--warning);">
+                    <strong style="color: #92400e;">⚡ 즉시 조치 필요</strong><br>
+                    TQQQ 규칙1 매도 신호 발생<br>
+                    <button onclick="alert('TQQQ 매도 실행 모드로 전환됩니다')" style="margin-top: 8px; padding: 8px 16px; background: var(--danger); color: white; border: none; border-radius: 4px; cursor: pointer; font-weight: 600;">➜ 매도 승인</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="footer">
+        <p>마지막 업데이트: 2026-08-02 15:30 | 다음 갱신: 내일 15:30</p>
+        <p>한국투자증권 KIS API 연동 | 환전: 월 1회(A방식) | 수수료: 0.25%</p>
+    </div>
+
+    <script>
+        function switchTab(tabName) {
+            // 모든 탭 숨기기
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.tab-btn').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            // 선택한 탭 표시
+            const tabId = tabName + '-tab';
+            document.getElementById(tabId).classList.add('active');
+            event.target.classList.add('active');
+        }
+
+        function refreshData() {
+            alert('데이터 새로고침 중...\n\n실제 운영 시에는 KIS API로 자동 갱신됩니다.');
+            // 실제로는 KIS API 호출
+        }
+
+        // 초기화
+        document.addEventListener('DOMContentLoaded', function() {
+            const today = new Date();
+            const dateStr = today.getFullYear() + '-' +
+                          String(today.getMonth() + 1).padStart(2, '0') + '-' +
+                          String(today.getDate()).padStart(2, '0');
+            document.getElementById('today-date').textContent = dateStr;
+        });
+    </script>
+</body>
+</html>
