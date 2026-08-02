@@ -567,44 +567,69 @@
     </div>
 
     <script>
-        function executeSignal(ticker) {
-            alert(`✓ [${ticker}] 매도 신호 승인됨\n\n내일 장 마감 후 매도 실행 예정입니다.`);
-        }
-
-        function modifySignal(ticker) {
-            const modification = prompt(`[${ticker}] 신호 수정\n\n조정 사항을 입력하세요:\n(예: 5% 더 기다리기, 수량 절반만 팔기 등)`);
-            if (modification) {
-                alert(`✓ [${ticker}] 수정사항 적용됨\n\n내용: ${modification}`);
-            }
-        }
-
-        function skipSignal(ticker) {
-            alert(`✓ [${ticker}] 신호 연기됨\n\n내일 다시 판정합니다.`);
-        }
-
-        function confirmUnderstand(ticker) {
-            alert(`✓ [${ticker}] 확인되었습니다.\n\n계속 모니터링합니다.`);
-        }
-
-        function resetCounter(ticker) {
-            const reason = prompt('손절 해제 사유를 입력하세요:');
-            if (reason) {
-                alert(`✓ [${ticker}] 손절 카운트 초기화됨\n\n사유: ${reason}`);
-            }
-        }
-
-        function finalApproval(action) {
-            if (action === 'approve') {
-                alert('✅ 승인 완료!\n\nTQQQ 규칙1 매도 신호가 승인되었습니다.\n\n다음 단계:\n1. 한투 앱 열기\n2. TQQQ 전량 매도 주문 (현재가로)\n3. 15거래일 재투자 스케줄 진행\n\n나머지 신호들은 내일 다시 분석됩니다.');
-            } else if (action === 'modify') {
-                const mod = prompt('수정 사항을 입력하세요:\n(예: TQQQ 매도 금액 50% 줄이기, 내일 대신 모레 실행 등)');
-                if (mod) {
-                    alert(`✓ 수정 사항 적용됨: ${mod}\n\n수정된 신호로 승인됩니다.`);
-                }
-            } else {
-                alert('✗ TQQQ 매도 신호가 거부되었습니다.\n내일 다시 판정합니다.');
-            }
-        }
-    </script>
-</body>
-</html>
+  // API 엔드포인트
+  const API_URL = '/api/kis';
+  const TELEGRAM_API = '/api/telegram';
+  
+  // 어드바이저 봇 초기화
+  async function initAdvisorBot() {
+    try {
+      const response = await fetch(API_URL);
+      const data = await response.json();
+      
+      if (data.ok) {
+        displaySignals(data.signals);
+        updateTimestamp();
+      }
+    } catch (error) {
+      console.error('Advisor Bot Error:', error);
+    }
+  }
+  
+  // 신호 표시
+  function displaySignals(signals) {
+    if (signals && signals.length > 0) {
+      signals.forEach(signal => {
+        console.log(`📊 ${signal.ticker}: ${signal.message}`);
+      });
+    }
+  }
+  
+  // 최종 승인
+  function finalApproval(action) {
+    if (action === 'approve') {
+      alert('✅ 승인 완료!\n\n신호가 승인되었습니다.');
+      sendSignalAlert();
+    } else if (action === 'modify') {
+      const mod = prompt('수정 사항을 입력하세요:');
+      if (mod) alert(`✓ 수정 사항 적용됨: ${mod}`);
+    } else {
+      alert('✗ 신호가 거부되었습니다.');
+    }
+  }
+  
+  // 신호 알림 전송
+  async function sendSignalAlert() {
+    await fetch(TELEGRAM_API, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        type: 'signal',
+        data: { message: '사용자 승인 신호' }
+      })
+    });
+  }
+  
+  // 시간 업데이트
+  function updateTimestamp() {
+    const now = new Date();
+    document.querySelector('.bot-header-subtitle')?.innerText = 
+      `${now.toLocaleString('ko-KR')} | 다음 분석: 내일 15:30`;
+  }
+  
+  // 페이지 로드 시 초기화
+  document.addEventListener('DOMContentLoaded', initAdvisorBot);
+  
+  // 매 5분마다 갱신
+  setInterval(initAdvisorBot, 5 * 60 * 1000);
+</script>
