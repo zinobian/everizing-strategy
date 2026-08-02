@@ -646,35 +646,61 @@
         <p>한국투자증권 KIS API 연동 | 환전: 월 1회(A방식) | 수수료: 0.25%</p>
     </div>
 
-    <script>
-        function switchTab(tabName) {
-            // 모든 탭 숨기기
-            document.querySelectorAll('.tab-content').forEach(tab => {
-                tab.classList.remove('active');
-            });
-            document.querySelectorAll('.tab-btn').forEach(btn => {
-                btn.classList.remove('active');
-            });
-
-            // 선택한 탭 표시
-            const tabId = tabName + '-tab';
-            document.getElementById(tabId).classList.add('active');
-            event.target.classList.add('active');
-        }
-
-        function refreshData() {
-            alert('데이터 새로고침 중...\n\n실제 운영 시에는 KIS API로 자동 갱신됩니다.');
-            // 실제로는 KIS API 호출
-        }
-
-        // 초기화
-        document.addEventListener('DOMContentLoaded', function() {
-            const today = new Date();
-            const dateStr = today.getFullYear() + '-' +
-                          String(today.getMonth() + 1).padStart(2, '0') + '-' +
-                          String(today.getDate()).padStart(2, '0');
-            document.getElementById('today-date').textContent = dateStr;
-        });
-    </script>
-</body>
-</html>
+   <script>
+  // API 엔드포인트
+  const API_URL = '/api/kis';
+  
+  // 실시간 데이터 로드
+  async function loadPortfolioData() {
+    try {
+      const response = await fetch(API_URL);
+      const data = await response.json();
+      
+      if (data.ok && data.portfolio) {
+        updateDashboard(data.portfolio, data.signals);
+      }
+    } catch (error) {
+      console.error('API Error:', error);
+    }
+  }
+  
+  // 대시보드 업데이트
+  function updateDashboard(portfolio, signals) {
+    // 포트폴리오 데이터 업데이트 (예시)
+    if (portfolio.output2) {
+      const totalValue = portfolio.output2[0]?.tot_evlu_amt || '조회 중...';
+      document.querySelector('.summary-value')?.innerText = totalValue;
+    }
+    
+    // 신호 업데이트
+    if (signals && signals.length > 0) {
+      signals.forEach(signal => {
+        console.log(`🚨 신호: ${signal.message}`);
+        // 텔레그램 알림 전송
+        sendSignalAlert(signal);
+      });
+    }
+  }
+  
+  // 텔레그램 알림 전송
+  async function sendSignalAlert(signal) {
+    try {
+      await fetch('/api/telegram', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          type: 'signal',
+          data: signal
+        })
+      });
+    } catch (error) {
+      console.error('Telegram Error:', error);
+    }
+  }
+  
+  // 페이지 로드 시 데이터 조회
+  loadPortfolioData();
+  
+  // 매 5분마다 자동 새로고침
+  setInterval(loadPortfolioData, 5 * 60 * 1000);
+</script>
