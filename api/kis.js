@@ -4,7 +4,6 @@ module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
 
-  // 환경변수 확인
   console.log('KIS_API_KEY loaded:', process.env.KIS_API_KEY ? 'YES' : 'NO');
   console.log('KIS_API_SECRET loaded:', process.env.KIS_API_SECRET ? 'YES' : 'NO');
   console.log('KIS_ACCOUNT:', process.env.KIS_ACCOUNT);
@@ -47,40 +46,38 @@ module.exports = async (req, res) => {
           console.log('KIS API Response received');
           try {
             const kisData = JSON.parse(data);
-            console.log('KIS API Success:', kisData.rt_cd);
+            
+            // ⭐ 전체 응답 출력 (디버깅용)
+            console.log('Full KIS Response:', JSON.stringify(kisData, null, 2));
+            console.log('rt_cd:', kisData.rt_cd);
+            console.log('msg:', kisData.msg);
 
             if (kisData.rt_cd === '0') {
-              // 성공
               const positions = (kisData.output2 || []).map(p => ({
                 ticker: p.prdt_name,
                 quantity: parseInt(p.hldg_qty),
                 current_price: parseFloat(p.prpr),
                 avg_price: parseFloat(p.pchs_avg_pricx),
-                profit_rate: ((parseFloat(p.prpr) - parseFloat(p.pchs_avg_pricx)) / parseFloat(p.pchs_avg_pricx) * 100).toFixed(2)
               }));
 
               res.status(200).json({
                 portfolio: {
                   total_value: positions.reduce((sum, p) => sum + (p.quantity * p.current_price), 0),
-                  total_return: 1900000,
-                  return_rate: 8.5,
                   positions
-                },
-                signals: [],
-                exchange_rate: 1310.5
+                }
               });
             } else {
-              throw new Error(`KIS API Error: ${kisData.msg}`);
+              throw new Error(`KIS Error Code ${kisData.rt_cd}: ${kisData.msg || 'No message provided'}`);
             }
           } catch (e) {
-            console.error('Parse error:', e.message);
+            console.error('Parse/Process error:', e.message);
             reject(e);
           }
         });
       });
 
       req_kis.on('error', (err) => {
-        console.error('Request error:', err.message);
+        console.error('Network error:', err.message);
         reject(err);
       });
 
@@ -88,10 +85,9 @@ module.exports = async (req, res) => {
     });
 
   } catch (error) {
-    console.error('Final Error:', error.message);
+    console.error('❌ Final Error:', error.message);
     res.status(500).json({ 
-      error: error.message,
-      type: error.code
+      error: error.message
     });
   }
 };
