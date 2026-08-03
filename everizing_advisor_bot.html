@@ -3,76 +3,202 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>에버라이징 어드바이저 봇</title>
+    <title>Everizing 어드바이저 봇</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f8fafc; padding: 20px; }
-        .container { max-width: 900px; margin: 0 auto; }
-        .header { background: linear-gradient(135deg, #2563eb 0%, #1e40af 100%); color: white; padding: 24px; border-radius: 8px; margin-bottom: 24px; }
-        .section { background: white; padding: 20px; margin-bottom: 20px; border-radius: 8px; border: 1px solid #e2e8f0; }
-        .approval-box { background: #f0fdf4; border: 2px solid #16a34a; border-radius: 8px; padding: 20px; text-align: center; margin: 24px 0; }
-        .btn { padding: 10px 24px; margin: 5px; border: none; border-radius: 4px; cursor: pointer; font-weight: 600; }
-        .btn-approve { background: #16a34a; color: white; }
-        .btn-approve:hover { background: #15803d; }
-        .btn-modify { background: #e2e8f0; color: #475569; }
-        .signal-card { padding: 16px; margin: 12px 0; border-left: 4px solid; border-radius: 4px; }
-        .signal-critical { background: #fef2f2; border-left-color: #dc2626; }
-        h2 { color: #2563eb; margin-top: 0; }
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .container {
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+            max-width: 600px;
+            width: 100%;
+            padding: 40px;
+        }
+        h1 {
+            color: #333;
+            margin-bottom: 30px;
+            text-align: center;
+            font-size: 28px;
+        }
+        .portfolio-status {
+            background: #f8f9fa;
+            border-radius: 12px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            padding: 10px 0;
+            border-bottom: 1px solid #e9ecef;
+        }
+        .status-item:last-child {
+            border-bottom: none;
+        }
+        .status-label {
+            color: #666;
+            font-weight: 500;
+        }
+        .status-value {
+            color: #333;
+            font-weight: bold;
+        }
+        .signal-section {
+            background: #fff3cd;
+            border-left: 4px solid #ffc107;
+            border-radius: 8px;
+            padding: 20px;
+            margin-bottom: 30px;
+        }
+        .signal-title {
+            font-size: 18px;
+            font-weight: bold;
+            color: #856404;
+            margin-bottom: 10px;
+        }
+        .signal-content {
+            color: #856404;
+            line-height: 1.6;
+        }
+        .button-group {
+            display: flex;
+            gap: 12px;
+            margin-top: 30px;
+        }
+        button {
+            flex: 1;
+            padding: 15px;
+            border: none;
+            border-radius: 8px;
+            font-size: 16px;
+            font-weight: bold;
+            cursor: pointer;
+            transition: all 0.3s ease;
+        }
+        .approve-btn {
+            background: #28a745;
+            color: white;
+        }
+        .approve-btn:hover {
+            background: #218838;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(40, 167, 69, 0.4);
+        }
+        .modify-btn {
+            background: #ffc107;
+            color: #333;
+        }
+        .modify-btn:hover {
+            background: #e0a800;
+            transform: translateY(-2px);
+        }
+        .reject-btn {
+            background: #dc3545;
+            color: white;
+        }
+        .reject-btn:hover {
+            background: #c82333;
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(220, 53, 69, 0.4);
+        }
+        .message-box {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 8px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
     </style>
 </head>
 <body>
     <div class="container">
-        <div class="header">
-            <h1>🤖 어드바이저 봇 일일 분석</h1>
-            <p>2026-08-02 (금) | 15:35 KST | 다음 분석: 2026-08-03 15:30</p>
-        </div>
-
-        <div class="section">
-            <h2>📊 포트폴리오 현황</h2>
-            <p><strong>평가액:</strong> 12,500,000 원</p>
-            <p><strong>수익:</strong> +1,900,000 원 (+8.5%)</p>
-        </div>
-
-        <div class="section">
-            <h2>🎯 오늘의 매매신호</h2>
-            <div class="signal-card signal-critical">
-                <strong>🔴 [긴급] TQQQ - 규칙1 익절 신호</strong>
-                <p>현재가: $115.50 | 평단가: $98.20 | 수익률: +17.7%</p>
+        <h1>🤖 Everizing 어드바이저 봇</h1>
+        
+        <div class="portfolio-status">
+            <div class="status-item">
+                <span class="status-label">포트폴리오 평가액</span>
+                <span class="status-value">12,500,000 원</span>
+            </div>
+            <div class="status-item">
+                <span class="status-label">오늘의 수익</span>
+                <span class="status-value">+1,900,000 원 (+8.5%)</span>
             </div>
         </div>
 
-        <div class="approval-box">
-            <h3>🎯 최종 승인</h3>
-            <p><strong>TQQQ 규칙1 매도 신호</strong>에 대해 승인하시겠습니까?</p>
-            <button class="btn btn-approve" onclick="approveSignal()">✓ 승인하기</button>
-            <button class="btn btn-modify" onclick="modifySignal()">✏️ 수정</button>
-            <button class="btn btn-modify" onclick="rejectSignal()">✗ 거부</button>
+        <div class="signal-section">
+            <div class="signal-title">🚨 오늘의 매매신호</div>
+            <div class="signal-content">
+                <p><strong>[권고] TQQQ - 규직1 익절 신호</strong></p>
+                <p style="margin-top: 10px;">현재가: $115.50 | 평단가: $98.20 | 수익률: +17.7%</p>
+                <p style="margin-top: 10px;">15% 수익률 목표 도달. 익절을 권고합니다.</p>
+            </div>
         </div>
+
+        <div class="button-group">
+            <button class="approve-btn" onclick="approveSignal()">✓ 승인하기</button>
+            <button class="modify-btn" onclick="modifySignal()">✏️ 수정</button>
+            <button class="reject-btn" onclick="rejectSignal()">✗ 거부</button>
+        </div>
+
+        <div id="message"></div>
     </div>
 
     <script>
         function approveSignal() {
-            alert('✅ 승인 완료!\n\nTQQQ 매도 신호가 승인되었습니다.\n텔레그램으로 알림이 발송됩니다.');
-            sendTelegram('TQQQ 익절 신호 승인됨!');
-        }
-
-        function modifySignal() {
-            alert('✏️ 수정 모드');
-        }
-
-        function rejectSignal() {
-            alert('✗ 거부됨');
-        }
-
-        function sendTelegram(msg) {
+            const messageBox = document.getElementById('message');
+            messageBox.textContent = '신호를 승인하는 중...';
+            messageBox.className = 'message-box';
+            
             fetch('/api/telegram', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     type: 'signal',
-                    data: { message: msg }
+                    data: { message: 'TQQQ 익절 신호 승인됨!' }
                 })
-            }).then(r => console.log('Telegram:', r))
-              .catch(e => console.error('Error:', e));
+            })
+            .then(r => r.json())
+            .then(data => {
+                console.log('Telegram Response:', data);
+                messageBox.textContent = '✅ 승인 완료! 텔레그램으로 알림이 발송되었습니다.';
+                messageBox.className = 'message-box success';
+            })
+            .catch(e => {
+                console.error('Error:', e);
+                messageBox.textContent = '❌ 오류 발생: ' + e.message;
+                messageBox.className = 'message-box error';
+            });
+        }
+
+        function modifySignal() {
+            alert('수정 기능은 준비 중입니다.');
+        }
+
+        function rejectSignal() {
+            alert('거부되었습니다.');
         }
     </script>
 </body>
