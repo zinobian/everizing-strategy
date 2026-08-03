@@ -45,13 +45,7 @@ const chatId = '-5309587192';
 async function sendSignalAlert(signal) {
   const message = `
 🚨 <b>매매 신호 발생!</b>
-
-<b>종목:</b> ${signal.ticker}
-<b>신호:</b> ${signal.type}
-<b>수익률:</b> ${signal.rate}%
-
-<b>메시지:</b> ${signal.message}
-
+<b>메시지:</b> ${signal.message || '신호'}
 ⏰ 시간: ${new Date().toLocaleString('ko-KR')}
 `;
 
