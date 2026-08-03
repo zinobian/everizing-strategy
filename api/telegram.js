@@ -1,4 +1,3 @@
-// Vercel Serverless Function - 텔레그램 알림
 const https = require('https');
 
 async function sendTelegramMessage(message) {
@@ -26,15 +25,23 @@ async function sendTelegramMessage(message) {
       let result = '';
       res.on('data', chunk => result += chunk);
       res.on('end', () => {
+        console.log('Telegram API Response:', result);
         try {
-          resolve(JSON.parse(result));
+          const parsed = JSON.parse(result);
+          console.log('Parsed Response:', parsed);
+          resolve(parsed);
         } catch (e) {
+          console.log('Parse Error:', e);
           resolve({ ok: true });
         }
       });
     });
 
-    req.on('error', reject);
+    req.on('error', (err) => {
+      console.log('Request Error:', err);
+      reject(err);
+    });
+    
     req.write(data);
     req.end();
   });
@@ -77,7 +84,7 @@ module.exports = async (req, res) => {
     }
     res.status(400).json({ error: 'Invalid request' });
   } catch (error) {
-    console.error('Telegram Error:', error);
+    console.error('Handler Error:', error);
     res.status(500).json({ error: error.message });
   }
 };
