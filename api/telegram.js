@@ -4,7 +4,7 @@ const https = require('https');
 // 텔레그램 메시지 전송
 async function sendTelegramMessage(message) {
 const token = '8808573863:AAGaoZo_1PbW53U0bChF1reOUTeOA1nV1bM';
-const chatId = '-5309587192';
+const chatId = '-1004325585686';
 
   const data = JSON.stringify({
     chat_id: chatId,
