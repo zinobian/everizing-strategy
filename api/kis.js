@@ -1,3 +1,7 @@
+console.log('KIS_API_KEY:', process.env.KIS_API_KEY ? 'LOADED' : 'NOT LOADED');
+console.log('KIS_API_SECRET:', process.env.KIS_API_SECRET ? 'LOADED' : 'NOT LOADED');
+console.log('KIS_ACCOUNT:', process.env.KIS_ACCOUNT);
+
 const https = require('https');
 
 function makeKISRequest(path, method = 'GET') {
