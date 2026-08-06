@@ -1,48 +1,17 @@
 /**
- * 에버라이징 일일 신호 (고급 알림 버전)
+ * 에버라이징 일일 신호 + 텔레그램 버튼
  */
 
-const https = require('https');
 const { getPrices } = require('../lib/price');
 const { buildPortfolioStatus, summarize, isProfitTarget } = require('../lib/portfolio');
+const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const CONFIG = require('../lib/config');
 
-const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN || '8808573863:AAGaoZo_1PbW53UObChFlreOUTeOA1nV1WM';
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID || '-1004325585686';
-
-function sendTelegram(message) {
-  return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({
-      chat_id: TELEGRAM_CHAT_ID,
-      text: message,
-      parse_mode: 'HTML',
-      disable_web_page_preview: true
-    });
-
-    const options = {
-      hostname: 'api.telegram.org',
-      path: `/bot${TELEGRAM_TOKEN}/sendMessage`,
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      }
-    };
-
-    const req = https.request(options, (res) => {
-      let body = '';
-      res.on('data', chunk => body += chunk);
-      res.on('end', () => resolve(body));
-    });
-
-    req.on('error', reject);
-    req.write(postData);
-    req.end();
-  });
-}
-
 function formatMoney(n) {
-  return Number(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return Number(n).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
 }
 
 module.exports = async (req, res) => {
@@ -50,7 +19,7 @@ module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
   try {
-    // 테스트용 가상 포지션 (나중에 실제 잔고로 교체)
+    // 테스트용 가상 포지션
     const positions = {
       TQQQ: { qty: 20, avgPrice: 60.0 },
       SOXL: { qty: 10, avgPrice: 110.0 },
@@ -76,12 +45,11 @@ module.exports = async (req, res) => {
       minute: '2-digit'
     });
 
-    // ===== 고급 메시지 구성 =====
+    // 메시지 작성
     let msg = '';
     msg += `━━━━━━━━━━━━━━━━━━\n`;
     msg += `📈 <b>EVERIZING DAILY REPORT</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━\n\n`;
-
     msg += `🗓 <b>${now}</b>\n\n`;
 
     msg += `💼 <b>Portfolio Summary</b>\n`;
@@ -90,7 +58,6 @@ module.exports = async (req, res) => {
     msg += `├ 평가손익  <code>$${formatMoney(summary.totalPnl)}</code>\n`;
     msg += `└ 수익률    <b>${summary.totalReturn >= 0 ? '+' : ''}${summary.totalReturn}%</b>\n\n`;
 
-    // 종목별 현황
     msg += `📋 <b>Positions</b>\n`;
     for (const p of portfolio) {
       const sign = p.returnPct >= 0 ? '+' : '';
@@ -101,24 +68,45 @@ module.exports = async (req, res) => {
 
     msg += `\n`;
 
-    // 신호
     if (profitSignals.length > 0) {
       msg += `🚨 <b>ACTION REQUIRED</b>\n`;
       msg += `규칙1 익절 구간 도달 (+15%)\n\n`;
+
       for (const s of profitSignals) {
         msg += `✅ <b>${s.ticker}</b>  +${s.returnPct}%\n`;
         msg += `    평단 $${formatMoney(s.avgPrice)} → 현재 $${formatMoney(s.currentPrice)}\n`;
       }
-      msg += `\n💡 익절 여부를 검토해 주세요.`;
+
+      msg += `\n아래에서 선택해 주세요.`;
+
+      // 버튼 구성
+      const buttons = [];
+
+      // 종목별 승인 버튼
+      for (const s of profitSignals) {
+        buttons.push([
+          {
+            text: `✅ ${s.ticker} 익절 승인`,
+            callback_data: `approve:${s.ticker}`
+          }
+        ]);
+      }
+
+      // 전체 보류 버튼
+      buttons.push([
+        {
+          text: '⏸ 전체 보류',
+          callback_data: 'hold:all'
+        }
+      ]);
+
+      await sendMessageWithButtons(msg, buttons);
     } else {
       msg += `✨ <b>No Exit Signal</b>\n`;
       msg += `현재 익절 조건에 해당하는 종목이 없습니다.`;
+      msg += `\n\n<i>※ 가상 포지션 기준 테스트</i>`;
+      await sendMessage(msg);
     }
-
-    msg += `\n\n`;
-    msg += `<i>※ 가상 포지션 기준 테스트</i>`;
-
-    await sendTelegram(msg);
 
     return res.status(200).json({
       success: true,
@@ -130,7 +118,7 @@ module.exports = async (req, res) => {
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try {
-      await sendTelegram(`❌ <b>Everizing Error</b>\n\n${error.message}`);
+      await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`);
     } catch (e) {}
 
     return res.status(500).json({
