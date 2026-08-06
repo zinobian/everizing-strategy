@@ -67,7 +67,7 @@ module.exports = async (req, res) => {
         'Authorization': `Bearer ${accessToken}`,
         'appkey': appKey,
         'appsecret': appSecret,
-        'tr_id': 'HHDFS00090000'
+        'tr_id': 'HHDFS00000300'
       },
       rejectUnauthorized: false
     };
