@@ -1,9 +1,12 @@
 /**
- * 에버라이징 일일 신호 + 텔레그램 버튼
+ * 에버라이징 일일 신호
+ * - 실제 KIS 잔고 우선
+ * - 잔고 없으면 안내 메시지
  */
 
 const { getPrices } = require('../lib/price');
 const { buildPortfolioStatus, summarize, isProfitTarget } = require('../lib/portfolio');
+const { getRealPositions } = require('../lib/balance');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const CONFIG = require('../lib/config');
 
@@ -19,23 +22,6 @@ module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
   try {
-    // 테스트용 가상 포지션
-    const positions = {
-      TQQQ: { qty: 20, avgPrice: 60.0 },
-      SOXL: { qty: 10, avgPrice: 110.0 },
-      GDXU: { qty: 15, avgPrice: 100.0 },
-      DFEN: { qty: 8,  avgPrice: 80.0 }
-    };
-
-    const tickers = Object.keys(positions);
-    const prices = await getPrices(tickers);
-    const portfolio = buildPortfolioStatus(positions, prices);
-    const summary = summarize(portfolio);
-
-    const profitSignals = portfolio.filter(p =>
-      isProfitTarget(p.returnPct, CONFIG.rules.profitNormal)
-    );
-
     const now = new Date().toLocaleString('ko-KR', {
       timeZone: 'Asia/Seoul',
       year: 'numeric',
@@ -45,7 +31,45 @@ module.exports = async (req, res) => {
       minute: '2-digit'
     });
 
-    // 메시지 작성
+    // 1. 실제 잔고 조회
+    const balanceResult = await getRealPositions();
+    let positions = balanceResult.positions || {};
+    let usingMock = false;
+
+    // 잔고 없으면 안내만 보내고 종료
+    if (Object.keys(positions).length === 0) {
+      const emptyMsg =
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📈 <b>EVERIZING DAILY REPORT</b>\n` +
+        `━━━━━━━━━━━━━━━━━━\n\n` +
+        `🗓 <b>${now}</b>\n\n` +
+        `📭 <b>보유 종목 없음</b>\n` +
+        `현재 계좌에 주식이 없습니다.\n` +
+        `매수 후 자동으로 신호 분석이 시작됩니다.`;
+
+      await sendMessage(emptyMsg);
+
+      return res.status(200).json({
+        success: true,
+        message: '보유 종목 없음',
+        positions: {}
+      });
+    }
+
+    // 2. 시세 조회
+    const tickers = Object.keys(positions);
+    const prices = await getPrices(tickers);
+
+    // 3. 포지션 상태 계산
+    const portfolio = buildPortfolioStatus(positions, prices);
+    const summary = summarize(portfolio);
+
+    // 4. 익절 신호
+    const profitSignals = portfolio.filter(p =>
+      isProfitTarget(p.returnPct, CONFIG.rules.profitNormal)
+    );
+
+    // 5. 메시지
     let msg = '';
     msg += `━━━━━━━━━━━━━━━━━━\n`;
     msg += `📈 <b>EVERIZING DAILY REPORT</b>\n`;
@@ -65,7 +89,6 @@ module.exports = async (req, res) => {
       msg += `${icon} <b>${p.ticker}</b>  ${sign}${p.returnPct}%\n`;
       msg += `    $${formatMoney(p.avgPrice)} → $${formatMoney(p.currentPrice)}  |  ${p.qty}주\n`;
     }
-
     msg += `\n`;
 
     if (profitSignals.length > 0) {
@@ -76,35 +99,17 @@ module.exports = async (req, res) => {
         msg += `✅ <b>${s.ticker}</b>  +${s.returnPct}%\n`;
         msg += `    평단 $${formatMoney(s.avgPrice)} → 현재 $${formatMoney(s.currentPrice)}\n`;
       }
-
       msg += `\n아래에서 선택해 주세요.`;
 
-      // 버튼 구성
-      const buttons = [];
-
-      // 종목별 승인 버튼
-      for (const s of profitSignals) {
-        buttons.push([
-          {
-            text: `✅ ${s.ticker} 익절 승인`,
-            callback_data: `approve:${s.ticker}`
-          }
-        ]);
-      }
-
-      // 전체 보류 버튼
-      buttons.push([
-        {
-          text: '⏸ 전체 보류',
-          callback_data: 'hold:all'
-        }
-      ]);
+      const buttons = profitSignals.map(s => ([
+        { text: `✅ ${s.ticker} 익절 승인`, callback_data: `approve:${s.ticker}` }
+      ]));
+      buttons.push([{ text: '⏸ 전체 보류', callback_data: 'hold:all' }]);
 
       await sendMessageWithButtons(msg, buttons);
     } else {
       msg += `✨ <b>No Exit Signal</b>\n`;
       msg += `현재 익절 조건에 해당하는 종목이 없습니다.`;
-      msg += `\n\n<i>※ 가상 포지션 기준 테스트</i>`;
       await sendMessage(msg);
     }
 
@@ -112,7 +117,8 @@ module.exports = async (req, res) => {
       success: true,
       summary,
       profitSignals,
-      message: '텔레그램 전송 완료'
+      usingMock,
+      message: '전송 완료'
     });
 
   } catch (error) {
