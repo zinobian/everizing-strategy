@@ -1,5 +1,6 @@
 /**
- * 에버라이징 일일 신호 (규칙 엔진 + 1월 휴장일 리마인드)
+ * 에버라이징 일일 신호
+ * TEST_MODE=true 이면 가상 보유로 전체 흐름 테스트
  */
 
 const https = require('https');
@@ -9,6 +10,9 @@ const { evaluateAll } = require('../lib/rules');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
 const CONFIG = require('../lib/config');
+
+// true: 가상 보유로 테스트 / false: 실제 잔고만
+const TEST_MODE = true;
 
 function formatMoney(n) {
   return Number(n).toLocaleString('en-US', {
@@ -72,27 +76,30 @@ module.exports = async (req, res) => {
       minute: '2-digit'
     });
 
-    // 1월 휴장일 업데이트 리마인드
     if (shouldRemindHolidayUpdate(now)) {
       const year = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).getFullYear();
       await sendMessage(holidayReminderMessage(year));
     }
 
-    // 실제 잔고
-    const balanceResult = await getRealPositions();
-    const positions = balanceResult.positions || {};
+    let positions = {};
+    let usingTest = false;
+
+    if (TEST_MODE) {
+      // 가상 보유 (실제 계좌와 무관)
+      positions = {
+        TQQQ: { qty: 20, avgPrice: 60.0 },
+        SOXL: { qty: 10, avgPrice: 110.0 }
+      };
+      usingTest = true;
+    } else {
+      const balanceResult = await getRealPositions();
+      positions = balanceResult.positions || {};
+    }
 
     if (Object.keys(positions).length === 0) {
-      const emptyMsg =
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `📈 <b>EVERIZING DAILY REPORT</b>\n` +
-        `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🗓 <b>${nowText}</b>\n\n` +
-        `📭 <b>보유 종목 없음</b>\n` +
-        `현재 계좌에 주식이 없습니다.\n` +
-        `매수 후 자동으로 신호 분석이 시작됩니다.`;
-
-      await sendMessage(emptyMsg);
+      await sendMessage(
+        `📈 <b>EVERIZING DAILY REPORT</b>\n\n🗓 ${nowText}\n\n📭 보유 종목 없음`
+      );
       return res.status(200).json({ success: true, message: '보유 종목 없음' });
     }
 
@@ -126,7 +133,9 @@ module.exports = async (req, res) => {
     msg += `━━━━━━━━━━━━━━━━━━\n`;
     msg += `📈 <b>EVERIZING DAILY REPORT</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━\n\n`;
-    msg += `🗓 <b>${nowText}</b>\n\n`;
+    msg += `🗓 <b>${nowText}</b>\n`;
+    if (usingTest) msg += `🧪 <b>TEST MODE (가상 보유)</b>\n`;
+    msg += `\n`;
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
     msg += `├ 투자원금  <code>$${formatMoney(totalCost)}</code>\n`;
@@ -153,13 +162,10 @@ module.exports = async (req, res) => {
       }
       msg += `\n아래에서 선택해 주세요.`;
 
-      const buttons = [];
-      for (const e of actionList) {
-        buttons.push([{
-          text: `✅ ${e.ticker} 처리 승인`,
-          callback_data: `approve:${e.ticker}`
-        }]);
-      }
+      const buttons = actionList.map(e => ([{
+        text: `✅ ${e.ticker} 처리 승인`,
+        callback_data: `approve:${e.ticker}`
+      }]));
       buttons.push([{ text: '⏸ 전체 보류', callback_data: 'hold:all' }]);
 
       await sendMessageWithButtons(msg, buttons);
@@ -168,17 +174,10 @@ module.exports = async (req, res) => {
       await sendMessage(msg);
     }
 
-    return res.status(200).json({
-      success: true,
-      evaluations,
-      message: '전송 완료'
-    });
-
+    return res.status(200).json({ success: true, usingTest, evaluations });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
-    try {
-      await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`);
-    } catch (e) {}
+    try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
     return res.status(500).json({ success: false, error: error.message });
   }
 };
