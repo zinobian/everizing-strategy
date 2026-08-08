@@ -2,7 +2,7 @@
   "crons": [
     {
       "path": "/api/daily-signal",
-      "schedule": "0 9 * * *"
+      "schedule": "0 0 * * *"
     }
   ]
 }
