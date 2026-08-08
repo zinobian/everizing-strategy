@@ -1,11 +1,8 @@
 /**
- * 에버라이징 일일 신호
- * + 종목별 평가/원금/손익
- * + 환율(USD/KRW)
+ * 토큰 1회 발급 후 환율·잔고·일봉 공유
  */
 
-const https = require('https');
-const { getRealPositions } = require('../lib/balance');
+const { getRealPositions, getAccessToken } = require('../lib/balance');
 const { getDailyIndicators } = require('../lib/daily');
 const { evaluateAll } = require('../lib/rules');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
@@ -24,46 +21,6 @@ function formatFx(n) {
   return Number(n).toLocaleString('ko-KR', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
-  });
-}
-
-function getAccessToken(appKey, appSecret) {
-  return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({
-      grant_type: 'client_credentials',
-      appkey: appKey,
-      appsecret: appSecret
-    });
-
-    const options = {
-      hostname: 'openapi.koreainvestment.com',
-      port: 9443,
-      path: '/oauth2/tokenP',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      },
-      rejectUnauthorized: false
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.access_token) resolve(json.access_token);
-          else reject(new Error('Token 발급 실패: ' + JSON.stringify(json)));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-
-    req.on('error', reject);
-    req.write(postData);
-    req.end();
   });
 }
 
@@ -102,11 +59,14 @@ module.exports = async (req, res) => {
       await sendMessage(holidayReminderMessage(year));
     }
 
-    // 환율 (토큰 1회 소모 가능 → 1분 제한 주의)
-    const fx = await getUsdKrwRate();
-    await new Promise(r => setTimeout(r, 1100));
+    const appKey = process.env.KIS_API_KEY;
+    const appSecret = process.env.KIS_API_SECRET;
 
-    const balanceResult = await getRealPositions();
+    // 토큰 1번만
+    const accessToken = await getAccessToken(appKey, appSecret);
+
+    const fx = await getUsdKrwRate(accessToken);
+    const balanceResult = await getRealPositions(accessToken);
     const positions = balanceResult.positions || {};
 
     if (Object.keys(positions).length === 0) {
@@ -122,10 +82,6 @@ module.exports = async (req, res) => {
       );
       return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
     }
-
-    const appKey = process.env.KIS_API_KEY;
-    const appSecret = process.env.KIS_API_SECRET;
-    const accessToken = await getAccessToken(appKey, appSecret);
 
     const tickers = Object.keys(positions);
     const dailies = {};
