@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * TEST_MODE=true 이면 가상 보유로 전체 흐름 테스트
+ * 종목별 평가금액·원금·손익 표시
  */
 
 const https = require('https');
@@ -10,9 +10,6 @@ const { evaluateAll } = require('../lib/rules');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
 const CONFIG = require('../lib/config');
-
-// true: 가상 보유로 테스트 / false: 실제 잔고만
-const TEST_MODE = true;
 
 function formatMoney(n) {
   return Number(n).toLocaleString('en-US', {
@@ -81,24 +78,18 @@ module.exports = async (req, res) => {
       await sendMessage(holidayReminderMessage(year));
     }
 
-    let positions = {};
-    let usingTest = false;
-
-    if (TEST_MODE) {
-      // 가상 보유 (실제 계좌와 무관)
-      positions = {
-        TQQQ: { qty: 20, avgPrice: 60.0 },
-        SOXL: { qty: 10, avgPrice: 110.0 }
-      };
-      usingTest = true;
-    } else {
-      const balanceResult = await getRealPositions();
-      positions = balanceResult.positions || {};
-    }
+    const balanceResult = await getRealPositions();
+    const positions = balanceResult.positions || {};
 
     if (Object.keys(positions).length === 0) {
       await sendMessage(
-        `📈 <b>EVERIZING DAILY REPORT</b>\n\n🗓 ${nowText}\n\n📭 보유 종목 없음`
+        `━━━━━━━━━━━━━━━━━━\n` +
+        `📈 <b>EVERIZING DAILY REPORT</b>\n` +
+        `━━━━━━━━━━━━━━━━━━\n\n` +
+        `🗓 <b>${nowText}</b>\n\n` +
+        `📭 <b>보유 종목 없음</b>\n` +
+        `현재 계좌에 주식이 없습니다.\n` +
+        `매수 후 자동으로 신호 분석이 시작됩니다.`
       );
       return res.status(200).json({ success: true, message: '보유 종목 없음' });
     }
@@ -123,8 +114,10 @@ module.exports = async (req, res) => {
     let totalCost = 0;
     let totalEval = 0;
     for (const e of evaluations) {
-      totalCost += e.avgPrice * e.qty;
-      totalEval += e.current * e.qty;
+      const cost = e.avgPrice * e.qty;
+      const evalAmt = e.current * e.qty;
+      totalCost += cost;
+      totalEval += evalAmt;
     }
     const totalPnl = totalEval - totalCost;
     const totalReturn = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
@@ -133,9 +126,8 @@ module.exports = async (req, res) => {
     msg += `━━━━━━━━━━━━━━━━━━\n`;
     msg += `📈 <b>EVERIZING DAILY REPORT</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━\n\n`;
-    msg += `🗓 <b>${nowText}</b>\n`;
-    if (usingTest) msg += `🧪 <b>TEST MODE (가상 보유)</b>\n`;
-    msg += `\n`;
+    msg += `🗓 <b>${nowText}</b>\n\n`;
+
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
     msg += `├ 투자원금  <code>$${formatMoney(totalCost)}</code>\n`;
@@ -144,10 +136,17 @@ module.exports = async (req, res) => {
 
     msg += `📋 <b>Positions</b>\n`;
     for (const e of evaluations) {
+      const cost = e.avgPrice * e.qty;
+      const evalAmt = e.current * e.qty;
+      const pnl = evalAmt - cost;
       const sign = e.returnPct >= 0 ? '+' : '';
+      const pnlSign = pnl >= 0 ? '+' : '';
       const icon = e.signals.length ? '🔥' : (e.returnPct >= 0 ? '🟢' : '🔴');
+
       msg += `${icon} <b>${e.ticker}</b>  ${sign}${e.returnPct}%\n`;
-      msg += `    $${formatMoney(e.avgPrice)} → $${formatMoney(e.current)}  |  ${e.qty}주\n`;
+      msg += `    평단 $${formatMoney(e.avgPrice)} → 현재 $${formatMoney(e.current)} | ${e.qty}주\n`;
+      msg += `    평가 <code>$${formatMoney(evalAmt)}</code> / 원금 <code>$${formatMoney(cost)}</code>\n`;
+      msg += `    손익 <code>${pnlSign}$${formatMoney(Math.abs(pnl))}</code>\n`;
     }
     msg += `\n`;
 
@@ -174,7 +173,7 @@ module.exports = async (req, res) => {
       await sendMessage(msg);
     }
 
-    return res.status(200).json({ success: true, usingTest, evaluations });
+    return res.status(200).json({ success: true, evaluations });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
