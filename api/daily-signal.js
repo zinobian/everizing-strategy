@@ -1,6 +1,7 @@
 /**
  * 에버라이징 일일 신호
- * 종목별 평가금액·원금·손익 표시
+ * + 종목별 평가/원금/손익
+ * + 환율(USD/KRW)
  */
 
 const https = require('https');
@@ -9,10 +10,18 @@ const { getDailyIndicators } = require('../lib/daily');
 const { evaluateAll } = require('../lib/rules');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
+const { getUsdKrwRate } = require('../lib/fx');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
   return Number(n).toLocaleString('en-US', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function formatFx(n) {
+  return Number(n).toLocaleString('ko-KR', {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
@@ -58,6 +67,21 @@ function getAccessToken(appKey, appSecret) {
   });
 }
 
+function fxBlock(fx) {
+  if (!fx || !fx.ok || !fx.rate) {
+    return `💱 <b>환율</b>\n조회 실패${fx?.message ? ` (${fx.message})` : ''}\n\n`;
+  }
+  const sign = fx.change > 0 ? '+' : '';
+  return (
+    `💱 <b>환율 USD/KRW</b>\n` +
+    `오늘 <code>${formatFx(fx.rate)}</code>` +
+    (fx.prev ? `  (전일 ${formatFx(fx.prev)})` : '') +
+    (fx.change != null ? `\n변동 ${sign}${formatFx(fx.change)}` : '') +
+    (fx.changePct != null ? ` (${sign}${fx.changePct}%)` : '') +
+    `\n\n`
+  );
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -78,6 +102,10 @@ module.exports = async (req, res) => {
       await sendMessage(holidayReminderMessage(year));
     }
 
+    // 환율 (토큰 1회 소모 가능 → 1분 제한 주의)
+    const fx = await getUsdKrwRate();
+    await new Promise(r => setTimeout(r, 1100));
+
     const balanceResult = await getRealPositions();
     const positions = balanceResult.positions || {};
 
@@ -87,11 +115,12 @@ module.exports = async (req, res) => {
         `📈 <b>EVERIZING DAILY REPORT</b>\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
         `🗓 <b>${nowText}</b>\n\n` +
+        fxBlock(fx) +
         `📭 <b>보유 종목 없음</b>\n` +
         `현재 계좌에 주식이 없습니다.\n` +
         `매수 후 자동으로 신호 분석이 시작됩니다.`
       );
-      return res.status(200).json({ success: true, message: '보유 종목 없음' });
+      return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
     }
 
     const appKey = process.env.KIS_API_KEY;
@@ -114,10 +143,8 @@ module.exports = async (req, res) => {
     let totalCost = 0;
     let totalEval = 0;
     for (const e of evaluations) {
-      const cost = e.avgPrice * e.qty;
-      const evalAmt = e.current * e.qty;
-      totalCost += cost;
-      totalEval += evalAmt;
+      totalCost += e.avgPrice * e.qty;
+      totalEval += e.current * e.qty;
     }
     const totalPnl = totalEval - totalCost;
     const totalReturn = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
@@ -127,6 +154,7 @@ module.exports = async (req, res) => {
     msg += `📈 <b>EVERIZING DAILY REPORT</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━\n\n`;
     msg += `🗓 <b>${nowText}</b>\n\n`;
+    msg += fxBlock(fx);
 
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
@@ -173,7 +201,7 @@ module.exports = async (req, res) => {
       await sendMessage(msg);
     }
 
-    return res.status(200).json({ success: true, evaluations });
+    return res.status(200).json({ success: true, fx, evaluations });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
