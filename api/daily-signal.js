@@ -1,5 +1,5 @@
 /**
- * 에버라이징 일일 신호 (규칙 엔진 연동)
+ * 에버라이징 일일 신호 (규칙 엔진 + 1월 휴장일 리마인드)
  */
 
 const https = require('https');
@@ -7,6 +7,7 @@ const { getRealPositions } = require('../lib/balance');
 const { getDailyIndicators } = require('../lib/daily');
 const { evaluateAll } = require('../lib/rules');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
+const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -61,7 +62,8 @@ module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
 
   try {
-    const now = new Date().toLocaleString('ko-KR', {
+    const now = new Date();
+    const nowText = now.toLocaleString('ko-KR', {
       timeZone: 'Asia/Seoul',
       year: 'numeric',
       month: '2-digit',
@@ -70,7 +72,13 @@ module.exports = async (req, res) => {
       minute: '2-digit'
     });
 
-    // 1. 실제 잔고
+    // 1월 휴장일 업데이트 리마인드
+    if (shouldRemindHolidayUpdate(now)) {
+      const year = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).getFullYear();
+      await sendMessage(holidayReminderMessage(year));
+    }
+
+    // 실제 잔고
     const balanceResult = await getRealPositions();
     const positions = balanceResult.positions || {};
 
@@ -79,7 +87,7 @@ module.exports = async (req, res) => {
         `━━━━━━━━━━━━━━━━━━\n` +
         `📈 <b>EVERIZING DAILY REPORT</b>\n` +
         `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🗓 <b>${now}</b>\n\n` +
+        `🗓 <b>${nowText}</b>\n\n` +
         `📭 <b>보유 종목 없음</b>\n` +
         `현재 계좌에 주식이 없습니다.\n` +
         `매수 후 자동으로 신호 분석이 시작됩니다.`;
@@ -88,12 +96,10 @@ module.exports = async (req, res) => {
       return res.status(200).json({ success: true, message: '보유 종목 없음' });
     }
 
-    // 2. 토큰 1번
     const appKey = process.env.KIS_API_KEY;
     const appSecret = process.env.KIS_API_SECRET;
     const accessToken = await getAccessToken(appKey, appSecret);
 
-    // 3. 일봉 지표 + 가격
     const tickers = Object.keys(positions);
     const dailies = {};
     const prices = {};
@@ -105,10 +111,8 @@ module.exports = async (req, res) => {
       await new Promise(r => setTimeout(r, 800));
     }
 
-    // 4. 규칙 평가
     const evaluations = evaluateAll(positions, prices, dailies);
 
-    // 5. 요약
     let totalCost = 0;
     let totalEval = 0;
     for (const e of evaluations) {
@@ -118,12 +122,11 @@ module.exports = async (req, res) => {
     const totalPnl = totalEval - totalCost;
     const totalReturn = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
-    // 6. 메시지
     let msg = '';
     msg += `━━━━━━━━━━━━━━━━━━\n`;
     msg += `📈 <b>EVERIZING DAILY REPORT</b>\n`;
     msg += `━━━━━━━━━━━━━━━━━━\n\n`;
-    msg += `🗓 <b>${now}</b>\n\n`;
+    msg += `🗓 <b>${nowText}</b>\n\n`;
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
     msg += `├ 투자원금  <code>$${formatMoney(totalCost)}</code>\n`;
@@ -139,7 +142,6 @@ module.exports = async (req, res) => {
     }
     msg += `\n`;
 
-    // 7. 신호 모으기
     const actionList = evaluations.filter(e => e.signals.length > 0);
 
     if (actionList.length > 0) {
