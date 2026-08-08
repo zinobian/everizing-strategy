@@ -1,10 +1,11 @@
 /**
- * 텔레그램 버튼 클릭 수신 + 모의 매도
+ * 텔레그램 버튼 클릭 수신 + 모의 매도 + 재투자 안내
  */
 
 const { sendMessage } = require('../lib/telegram');
 const { sellOverseas } = require('../lib/order');
 const { getRealPositions } = require('../lib/balance');
+const { buildReinvestPlan, formatReinvestMessage } = require('../lib/reinvest');
 const CONFIG = require('../lib/config');
 
 module.exports = async (req, res) => {
@@ -27,11 +28,12 @@ module.exports = async (req, res) => {
     if (data.startsWith('approve:')) {
       const ticker = data.split(':')[1];
 
-      // 실제 잔고에서 수량 확인
       let qty = 0;
+      let avgPrice = 0;
       try {
         const balance = await getRealPositions();
         qty = balance.positions?.[ticker]?.qty || 0;
+        avgPrice = balance.positions?.[ticker]?.avgPrice || 0;
       } catch (e) {
         qty = 0;
       }
@@ -41,7 +43,6 @@ module.exports = async (req, res) => {
       } else {
         const excd = CONFIG.tickers[ticker]?.excd || 'NAS';
 
-        // 기본 dryRun=true → 실제 주문 안 함
         const result = await sellOverseas({
           ticker,
           qty,
@@ -49,12 +50,16 @@ module.exports = async (req, res) => {
           dryRun: true
         });
 
+        // 재투자 금액: 일단 평단*수량으로 근사 (실매도 시 체결가*수량으로 교체)
+        const approxProceeds = avgPrice * qty;
+        const plan = buildReinvestPlan(approxProceeds, CONFIG.rules.reinvestDays || 15);
+
         reply =
           `✅ <b>${from}</b> 님이 <b>${ticker}</b> 매도를 승인했습니다.\n\n` +
           `📦 수량: ${qty}주\n` +
           `🧪 모드: 모의(dryRun)\n` +
-          `📝 ${result.message}\n\n` +
-          `<i>실제 주문은 dryRun을 false로 바꾼 뒤 활성화됩니다.</i>`;
+          `📝 ${result.message}\n` +
+          formatReinvestMessage(ticker, plan);
       }
     } else if (data === 'hold:all') {
       reply = `⏸ <b>${from}</b> 님이 전체 보류를 선택했습니다.`;
