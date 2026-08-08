@@ -1,4 +1,3 @@
-const { getPrices } = require('../lib/price');
 const { getDailyIndicators } = require('../lib/daily');
 const { evaluateAll } = require('../lib/rules');
 const https = require('https');
@@ -30,7 +29,7 @@ function getAccessToken(appKey, appSecret) {
         try {
           const json = JSON.parse(data);
           if (json.access_token) resolve(json.access_token);
-          else reject(new Error(JSON.stringify(json)));
+          else reject(new Error('Token 발급 실패: ' + JSON.stringify(json)));
         } catch (e) {
           reject(e);
         }
@@ -56,13 +55,21 @@ module.exports = async (req, res) => {
     const tickers = Object.keys(positions);
     const appKey = process.env.KIS_API_KEY;
     const appSecret = process.env.KIS_API_SECRET;
+
+    // 토큰 1번만 발급
     const accessToken = await getAccessToken(appKey, appSecret);
 
-    const prices = await getPrices(tickers);
-
     const dailies = {};
+    const prices = {};
+
     for (const t of tickers) {
-      dailies[t] = await getDailyIndicators(t, accessToken, appKey, appSecret);
+      const d = await getDailyIndicators(t, accessToken, appKey, appSecret);
+      dailies[t] = d;
+      prices[t] = {
+        price: d.lastClose || 0,
+        prevClose: 0,
+        change: 0
+      };
       await new Promise(r => setTimeout(r, 800));
     }
 
