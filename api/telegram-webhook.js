@@ -1,11 +1,12 @@
 /**
- * 텔레그램 버튼 클릭 → 실제 매도 주문
+ * 승인 → 실매도 + 매매 기록 + 재투자 안내
  */
 
 const { sendMessage } = require('../lib/telegram');
 const { sellOverseas } = require('../lib/order');
 const { getRealPositions } = require('../lib/balance');
 const { buildReinvestPlan, formatReinvestMessage } = require('../lib/reinvest');
+const { addTrade, ensureFirstBuyDate } = require('../lib/store');
 const CONFIG = require('../lib/config');
 
 module.exports = async (req, res) => {
@@ -22,7 +23,6 @@ module.exports = async (req, res) => {
 
     const data = callback.data || '';
     const from = callback.from?.first_name || 'User';
-
     let reply = '';
 
     if (data.startsWith('approve:')) {
@@ -43,7 +43,6 @@ module.exports = async (req, res) => {
       } else {
         const excd = CONFIG.tickers[ticker]?.excd || 'NAS';
 
-        // 실주문
         const result = await sellOverseas({
           ticker,
           qty,
@@ -52,8 +51,21 @@ module.exports = async (req, res) => {
         });
 
         if (result.success) {
+          // 매매 이력 기록 (메모리/추후 Redis)
+          try {
+            await addTrade({
+              date: new Date().toISOString().slice(0, 10),
+              ticker,
+              rule: 'APPROVE_SELL',
+              side: 'sell',
+              qty,
+              price: avgPrice,
+              note: result.message || '실매도 주문'
+            });
+          } catch (e) {}
+
           const approxProceeds = (avgPrice || 0) * qty;
-          const plan = buildReinvestPlan(approxProceeds, CONFIG.rules.reinvestDays || 15);
+          const plan = buildReinvestPlan(approxProceeds, CONFIG.rules?.reinvestDays || 15);
 
           reply =
             `✅ <b>${from}</b> 님, <b>${ticker}</b> 실매도 주문 전송\n\n` +
