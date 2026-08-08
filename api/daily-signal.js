@@ -1,5 +1,6 @@
 /**
- * 토큰 1회 발급 후 환율·잔고·일봉 공유
+ * 에버라이징 일일 신호
+ * + 환율 + 종목별 평가/원금/손익 + 정액매수 금액
  */
 
 const https = require('https');
@@ -23,6 +24,10 @@ function formatFx(n) {
     minimumFractionDigits: 2,
     maximumFractionDigits: 2
   });
+}
+
+function formatKrw(n) {
+  return Number(n).toLocaleString('ko-KR');
 }
 
 function getAccessToken(appKey, appSecret) {
@@ -80,6 +85,23 @@ function fxBlock(fx) {
   );
 }
 
+function dcaBlock() {
+  const tickers = CONFIG.tickers || {};
+  const keys = Object.keys(tickers);
+  if (keys.length === 0) return '';
+
+  let total = 0;
+  let lines = `💵 <b>정액매수 (일일)</b>\n`;
+
+  for (const t of keys) {
+    const amt = tickers[t].dailyBuy || 0;
+    total += amt;
+    lines += `├ ${t}  <code>${formatKrw(amt)}원</code>\n`;
+  }
+  lines += `└ 합계  <code>${formatKrw(total)}원</code>\n\n`;
+  return lines;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
@@ -115,6 +137,7 @@ module.exports = async (req, res) => {
         `━━━━━━━━━━━━━━━━━━\n\n` +
         `🗓 <b>${nowText}</b>\n\n` +
         fxBlock(fx) +
+        dcaBlock() +
         `📭 <b>보유 종목 없음</b>\n` +
         `현재 계좌에 주식이 없습니다.\n` +
         `매수 후 자동으로 신호 분석이 시작됩니다.`
@@ -150,6 +173,7 @@ module.exports = async (req, res) => {
     msg += `━━━━━━━━━━━━━━━━━━\n\n`;
     msg += `🗓 <b>${nowText}</b>\n\n`;
     msg += fxBlock(fx);
+    msg += dcaBlock();
 
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
