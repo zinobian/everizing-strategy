@@ -1,6 +1,7 @@
 /**
  * 텔레그램 웹훅
- * 승인 매도 + 규칙4 워터필링/대여랏 + /port
+ * approve:TICKER:RULE_TYPE
+ * 1·2·3 → 자기 15일 재투자 / 4 → 워터필링·대여랏
  */
 
 const { sendMessage } = require('../lib/telegram');
@@ -31,7 +32,6 @@ function formatFx(n) {
 
 async function buildPortfolioMessage() {
   const accessToken = await getAccessToken();
-
   let fxLine = '';
   try {
     const fx = await getUsdKrwRate(accessToken);
@@ -53,20 +53,13 @@ async function buildPortfolioMessage() {
 
   const positions = balance.positions || {};
   const tickers = Object.keys(positions);
-
   if (tickers.length === 0) {
-    return (
-      `💼 <b>Portfolio</b>\n\n` +
-      fxLine +
-      `📭 보유 종목 없음\n` +
-      `한투 계좌에 주식이 없습니다.`
-    );
+    return `💼 <b>Portfolio</b>\n\n${fxLine}📭 보유 종목 없음\n한투 계좌에 주식이 없습니다.`;
   }
 
   let totalCost = 0;
   let totalEval = 0;
   const rows = [];
-
   for (const t of tickers) {
     const p = positions[t];
     const qty = p.qty || 0;
@@ -80,7 +73,6 @@ async function buildPortfolioMessage() {
     totalEval += evalAmt;
     rows.push({ t, qty, avg, cur, cost, evalAmt, pnl, ret });
   }
-
   rows.sort((a, b) => b.ret - a.ret);
   const totalPnl = totalEval - totalCost;
   const totalRet = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
@@ -90,7 +82,6 @@ async function buildPortfolioMessage() {
   msg += `원금 <code>$${formatMoney(totalCost)}</code>\n`;
   msg += `손익 <code>$${formatMoney(totalPnl)}</code>  (${totalRet >= 0 ? '+' : ''}${totalRet.toFixed(2)}%)\n\n`;
   msg += `📋 <b>종목 (수익률순)</b>\n`;
-
   for (const r of rows) {
     const icon = r.ret >= 0 ? '🟢' : '🔴';
     const sign = r.ret >= 0 ? '+' : '';
@@ -106,14 +97,9 @@ function isPortCommand(text) {
   if (!text) return false;
   const t = text.trim().toLowerCase();
   return (
-    t === '/port' ||
-    t === '/portfolio' ||
-    t === '/status' ||
-    t === '포트' ||
-    t === '포트폴리오' ||
-    t === '잔고' ||
-    t.startsWith('/port@') ||
-    t.startsWith('/status@')
+    t === '/port' || t === '/portfolio' || t === '/status' ||
+    t === '포트' || t === '포트폴리오' || t === '잔고' ||
+    t.startsWith('/port@') || t.startsWith('/status@')
   );
 }
 
@@ -127,8 +113,7 @@ module.exports = async (req, res) => {
     const message = body.message;
 
     if (message && message.text && isPortCommand(message.text)) {
-      const msg = await buildPortfolioMessage();
-      await sendMessage(msg);
+      await sendMessage(await buildPortfolioMessage());
       return res.status(200).json({ ok: true, handled: 'port' });
     }
 
@@ -141,9 +126,13 @@ module.exports = async (req, res) => {
     let reply = '';
 
     if (data.startsWith('approve:')) {
-      const ticker = data.split(':')[1];
-      const accessToken = await getAccessToken();
+      const parts = data.split(':');
+      const ticker = parts[1];
+      const ruleType = parts[2] || 'UNKNOWN';
+      const isRule4 = ruleType.includes('ATH') || ruleType.includes('RULE4');
+      const isRule3 = ruleType.includes('BREAK') || ruleType.includes('RULE3');
 
+      const accessToken = await getAccessToken();
       let qty = 0;
       let avgPrice = 0;
       let currentPrice = 0;
@@ -170,61 +159,56 @@ module.exports = async (req, res) => {
           if (fx.ok && fx.rate) {
             const krwApprox = (currentPrice || avgPrice) * qty * fx.rate;
             fxLine =
-              `\n💱 매도 시점 환율 <code>${formatFx(fx.rate)}</code>\n` +
-              `   대략 원화 환산 <code>${Math.round(krwApprox).toLocaleString('ko-KR')}원</code>\n`;
+              `\n💱 환율 <code>${formatFx(fx.rate)}</code>\n` +
+              `   대략 <code>${Math.round(krwApprox).toLocaleString('ko-KR')}원</code>\n`;
           }
         } catch (e) {}
 
         if (result.success) {
           const proceeds = (currentPrice || avgPrice || 0) * qty;
-
           try {
             await addTrade({
               date: new Date().toISOString().slice(0, 10),
               ticker,
-              rule: 'APPROVE_SELL',
+              rule: ruleType,
               side: 'sell',
               qty,
               price: currentPrice || avgPrice,
-              note: result.message || '실매도 주문'
+              note: result.message || '실매도'
             });
           } catch (e) {}
 
-          // 기본: 15일 자기 재투자 안내
-          const plan = buildReinvestPlan(proceeds, CONFIG.rules?.reinvestDays || 15);
-
           reply =
-            `✅ <b>${from}</b> 님, <b>${ticker}</b> 실매도 주문 전송\n\n` +
-            `📦 수량: ${qty}주\n` +
-            `📝 ${result.message || '주문 요청 완료'}\n` +
+            `✅ <b>${from}</b> · <b>${ticker}</b> 매도 주문\n` +
+            `규칙: <code>${ruleType}</code>\n` +
+            `📦 ${qty}주 · ${result.message || '완료'}\n` +
             fxLine;
 
-          // 규칙4 형태 배분 시도 (워터필링) — 승인 시점에는 매도 후 분배 기록
-          // primary가 RULE4였는지는 콜백에 없으므로, 워터필링은 "분배 옵션"으로 항상 계산해 안내
-          // 실제 규칙 구분은 리포트 primary 기준; 여기서는 매도 후 재투자 기본 + 워터필 미리보기
-          try {
-            const hostedMap = await hostedPrincipalByHost();
-            const wf = waterfill(ticker, proceeds, positions, hostedMap);
-            if (wf.allocations.length > 0 || wf.parking > 0) {
+          if (isRule4) {
+            // 규칙4: 워터필링만 (자기 15일 재투자 없음)
+            try {
+              const hostedMap = await hostedPrincipalByHost();
+              const wf = waterfill(ticker, proceeds, positions, hostedMap);
               await createHostedLotsFromWaterfill(wf);
               reply += formatWaterfillMessage(wf);
-              reply += `\n(규칙4 경로와 동일하게 대여랏 기록됨. 규칙1·2·3 익절/손절이면 자기 15일 재투자를 우선하세요.)\n`;
+              reply += `\n📌 매일 정액매수는 그대로 유지하세요.\n`;
+            } catch (e) {
+              reply += `\n⚠️ 워터필 기록 오류: ${e.message}\n`;
             }
-          } catch (e) {
-            console.error('waterfill error', e.message);
+            try { await disarmAth(ticker); } catch (e) {}
+          } else {
+            // 규칙1·2·3: 자기 종목 15일 재투자
+            const plan = buildReinvestPlan(proceeds, CONFIG.rules?.reinvestDays || 15);
+            reply += formatReinvestMessage(ticker, plan);
+            reply += `\n📌 매일 정액매수는 그대로 유지 + 위 15일 분할을 추가하세요.\n`;
+            if (isRule3) {
+              try { await disarmStop(ticker); } catch (e) {}
+            }
           }
-
-          reply += formatReinvestMessage(ticker, plan);
-
-          // 무장 해제는 보수적으로: 손절/ATH 모두 호출 가능 상태면 리포트에서 재무장
-          try {
-            await disarmStop(ticker);
-            await disarmAth(ticker);
-          } catch (e) {}
         } else {
           reply =
-            `❌ <b>${ticker}</b> 매도 주문 실패\n\n` +
-            `📝 ${result.message || JSON.stringify(result.raw || result)}\n` +
+            `❌ <b>${ticker}</b> 매도 실패\n` +
+            `${result.message || JSON.stringify(result.raw || result)}\n` +
             fxLine;
         }
       }
