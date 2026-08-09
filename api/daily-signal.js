@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * + 환율 + 정액매수 + 평가/원금/손익 + 투자일수
+ * + 환율 + 정액매수 + 포지션 + 투자일수 + 관심 레버리지 시세
  */
 
 const https = require('https');
@@ -11,6 +11,7 @@ const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
 const { getUsdKrwRate } = require('../lib/fx');
 const { ensureFirstBuyDate, getHoldingDays, getTradeCounts } = require('../lib/store');
+const { getWatchQuotes, formatWatchBlock } = require('../lib/market-watch');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -93,7 +94,6 @@ function dcaBlock() {
 
   let total = 0;
   let lines = `💵 <b>정액매수 (일일)</b>\n`;
-
   for (const t of keys) {
     const amt = tickers[t].dailyBuy || 0;
     total += amt;
@@ -131,6 +131,14 @@ module.exports = async (req, res) => {
     const balanceResult = await getRealPositions(accessToken);
     const positions = balanceResult.positions || {};
 
+    // 관심 레버리지 시세 (토큰 재사용)
+    let watchQuotes = [];
+    try {
+      watchQuotes = await getWatchQuotes(accessToken, appKey, appSecret);
+    } catch (e) {
+      console.error('watch error:', e.message);
+    }
+
     if (Object.keys(positions).length === 0) {
       await sendMessage(
         `━━━━━━━━━━━━━━━━━━\n` +
@@ -139,11 +147,12 @@ module.exports = async (req, res) => {
         `🗓 <b>${nowText}</b>\n\n` +
         fxBlock(fx) +
         dcaBlock() +
+        formatWatchBlock(watchQuotes) +
         `📭 <b>보유 종목 없음</b>\n` +
         `현재 계좌에 주식이 없습니다.\n` +
         `매수 후 자동으로 신호 분석이 시작됩니다.`
       );
-      return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
+      return res.status(200).json({ success: true, message: '보유 종목 없음', fx, watchQuotes });
     }
 
     const today = now.toISOString().slice(0, 10);
@@ -182,6 +191,7 @@ module.exports = async (req, res) => {
     msg += `🗓 <b>${nowText}</b>\n\n`;
     msg += fxBlock(fx);
     msg += dcaBlock();
+    msg += formatWatchBlock(watchQuotes);
 
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
@@ -233,7 +243,7 @@ module.exports = async (req, res) => {
       await sendMessage(msg);
     }
 
-    return res.status(200).json({ success: true, fx, evaluations, holdingDaysMap });
+    return res.status(200).json({ success: true, fx, evaluations, watchQuotes });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
