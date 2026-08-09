@@ -1,7 +1,6 @@
 /**
  * 텔레그램 웹훅
  * approve:TICKER:RULE_TYPE
- * 1·2·3 → 자기 15일 재투자 / 4 → 워터필링·대여랏
  */
 
 const { sendMessage } = require('../lib/telegram');
@@ -185,11 +184,14 @@ module.exports = async (req, res) => {
             fxLine;
 
           if (isRule4) {
-            // 규칙4: 워터필링만 (자기 15일 재투자 없음)
             try {
               const hostedMap = await hostedPrincipalByHost();
               const wf = waterfill(ticker, proceeds, positions, hostedMap);
-              await createHostedLotsFromWaterfill(wf);
+              const hostPrices = {};
+              for (const t of Object.keys(positions)) {
+                hostPrices[t] = positions[t].currentPrice || positions[t].avgPrice || 0;
+              }
+              await createHostedLotsFromWaterfill(wf, undefined, hostPrices);
               reply += formatWaterfillMessage(wf);
               reply += `\n📌 매일 정액매수는 그대로 유지하세요.\n`;
             } catch (e) {
@@ -197,7 +199,6 @@ module.exports = async (req, res) => {
             }
             try { await disarmAth(ticker); } catch (e) {}
           } else {
-            // 규칙1·2·3: 자기 종목 15일 재투자
             const plan = buildReinvestPlan(proceeds, CONFIG.rules?.reinvestDays || 15);
             reply += formatReinvestMessage(ticker, plan);
             reply += `\n📌 매일 정액매수는 그대로 유지 + 위 15일 분할을 추가하세요.\n`;
