@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * + 환율 + 종목별 평가/원금/손익 + 정액매수 금액
+ * + 환율 + 정액매수 + 평가/원금/손익 + 투자일수
  */
 
 const https = require('https');
@@ -10,6 +10,7 @@ const { evaluateAll } = require('../lib/rules');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
 const { getUsdKrwRate } = require('../lib/fx');
+const { ensureFirstBuyDate, getHoldingDays, getTradeCounts } = require('../lib/store');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -145,11 +146,18 @@ module.exports = async (req, res) => {
       return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
     }
 
+    const today = now.toISOString().slice(0, 10);
     const tickers = Object.keys(positions);
     const dailies = {};
     const prices = {};
+    const holdingDaysMap = {};
+    const tradeCountMap = {};
 
     for (const t of tickers) {
+      await ensureFirstBuyDate(t, today);
+      holdingDaysMap[t] = await getHoldingDays(t);
+      tradeCountMap[t] = await getTradeCounts(t);
+
       const d = await getDailyIndicators(t, accessToken, appKey, appSecret);
       dailies[t] = d;
       prices[t] = { price: d.lastClose || 0, prevClose: 0, change: 0 };
@@ -189,11 +197,16 @@ module.exports = async (req, res) => {
       const sign = e.returnPct >= 0 ? '+' : '';
       const pnlSign = pnl >= 0 ? '+' : '';
       const icon = e.signals.length ? '🔥' : (e.returnPct >= 0 ? '🟢' : '🔴');
+      const days = holdingDaysMap[e.ticker];
+      const tc = tradeCountMap[e.ticker];
 
       msg += `${icon} <b>${e.ticker}</b>  ${sign}${e.returnPct}%\n`;
       msg += `    평단 $${formatMoney(e.avgPrice)} → 현재 $${formatMoney(e.current)} | ${e.qty}주\n`;
       msg += `    평가 <code>$${formatMoney(evalAmt)}</code> / 원금 <code>$${formatMoney(cost)}</code>\n`;
-      msg += `    손익 <code>${pnlSign}$${formatMoney(Math.abs(pnl))}</code>\n`;
+      msg += `    손익 <code>${pnlSign}$${formatMoney(Math.abs(pnl))}</code>`;
+      if (days != null) msg += ` · 투자 ${days}일`;
+      if (tc && tc.total > 0) msg += ` · 매매 ${tc.total}회`;
+      msg += `\n`;
     }
     msg += `\n`;
 
@@ -220,7 +233,7 @@ module.exports = async (req, res) => {
       await sendMessage(msg);
     }
 
-    return res.status(200).json({ success: true, fx, evaluations });
+    return res.status(200).json({ success: true, fx, evaluations, holdingDaysMap });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
