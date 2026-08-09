@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * 대여랏 틱 + 80일 정산 자동 시작 + 돈 흐름
+ * 미국 거래일에만 대여랏 틱
  */
 
 const { getRealPositions } = require('../lib/balance');
@@ -24,6 +24,7 @@ const {
   getCashParking,
   formatMoneyFlowBlock
 } = require('../lib/hosted-lots');
+const { isUsTradingDay } = require('../lib/trading-day');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -114,27 +115,35 @@ module.exports = async (req, res) => {
       console.error('balance-watch error:', e.message);
     }
 
+    const tradingDay = isUsTradingDay(now);
+
     let tickResult = { inflowOrders: [], settleOrders: [], lots: [] };
-    try {
-      tickResult = await tickHostedLots();
-    } catch (e) {
-      console.error('hosted tick error:', e.message);
+    let started = [];
+
+    if (tradingDay) {
+      try {
+        tickResult = await tickHostedLots();
+      } catch (e) {
+        console.error('hosted tick error:', e.message);
+      }
+    } else {
+      try {
+        tickResult.lots = await getHostedLots();
+      } catch (e) {}
     }
 
-    // host 현재가 맵 (정산 판정 + 리포트)
     const hostPrices = {};
     for (const t of Object.keys(positions)) {
       hostPrices[t] = positions[t].currentPrice || positions[t].avgPrice || 0;
     }
 
-    let started = [];
-    try {
-      started = await autoStartSettlements(hostPrices);
-      if (started.length) {
-        tickResult.lots = await getHostedLots();
+    if (tradingDay) {
+      try {
+        started = await autoStartSettlements(hostPrices);
+        if (started.length) tickResult.lots = await getHostedLots();
+      } catch (e) {
+        console.error('auto settle error:', e.message);
       }
-    } catch (e) {
-      console.error('auto settle error:', e.message);
     }
 
     const cashParking = await getCashParking();
@@ -150,7 +159,9 @@ module.exports = async (req, res) => {
       `━━━━━━━━━━━━━━━━━━\n` +
       `📈 <b>EVERIZING DAILY REPORT</b>\n` +
       `━━━━━━━━━━━━━━━━━━\n\n` +
-      `🗓 <b>${nowText}</b>\n\n` +
+      `🗓 <b>${nowText}</b>` +
+      (tradingDay ? `` : ` · <i>미국 휴장/주말 (대여랏 틱 없음)</i>`) +
+      `\n\n` +
       fxBlock(fx);
 
     const moneyFlow = formatMoneyFlowBlock(
@@ -168,7 +179,7 @@ module.exports = async (req, res) => {
       msg += dcaBlock();
       msg += formatWatchBlock(watchQuotes, fxRate);
       await sendMessage(msg);
-      return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
+      return res.status(200).json({ success: true, message: '보유 종목 없음', fx, tradingDay });
     }
 
     const today = now.toISOString().slice(0, 10);
@@ -192,14 +203,15 @@ module.exports = async (req, res) => {
       await new Promise(r => setTimeout(r, 800));
     }
 
-    // 일봉 가격으로 정산 재판정 (보유 있을 때 더 정확)
-    try {
-      const started2 = await autoStartSettlements(hostPrices);
-      if (started2.length) {
-        started = started2;
-        tickResult.lots = await getHostedLots();
-      }
-    } catch (e) {}
+    if (tradingDay) {
+      try {
+        const started2 = await autoStartSettlements(hostPrices);
+        if (started2.length) {
+          started = started2;
+          tickResult.lots = await getHostedLots();
+        }
+      } catch (e) {}
+    }
 
     const evaluations = evaluateAll(positions, prices, dailies, armMap);
     evaluations.sort((a, b) => (b.returnPct || 0) - (a.returnPct || 0));
@@ -301,7 +313,7 @@ module.exports = async (req, res) => {
       await sendMessage(msg);
     }
 
-    return res.status(200).json({ success: true, fx, evaluations, started });
+    return res.status(200).json({ success: true, fx, evaluations, tradingDay, started });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
