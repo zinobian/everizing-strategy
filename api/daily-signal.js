@@ -1,10 +1,8 @@
 /**
  * 에버라이징 일일 신호
- * 환율 → Portfolio → 승인 → 정액매수 → 3배 순위
- * + 분기 알림 + 잔고 변화 알림
+ * 토큰 Redis 캐시 사용
  */
 
-const https = require('https');
 const { getRealPositions } = require('../lib/balance');
 const { getDailyIndicators } = require('../lib/daily');
 const { evaluateAll } = require('../lib/rules');
@@ -15,6 +13,7 @@ const { getUsdKrwRate } = require('../lib/fx');
 const { ensureFirstBuyDate, getHoldingDays, getTradeCounts } = require('../lib/store');
 const { getWatchQuotes, formatWatchBlock } = require('../lib/market-watch');
 const { checkAndUpdateBalance } = require('../lib/balance-watch');
+const { getAccessToken } = require('../lib/kis-token');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -33,43 +32,6 @@ function formatFx(n) {
 
 function formatKrw(n) {
   return Number(n).toLocaleString('ko-KR');
-}
-
-function getAccessToken(appKey, appSecret) {
-  return new Promise((resolve, reject) => {
-    const postData = JSON.stringify({
-      grant_type: 'client_credentials',
-      appkey: appKey,
-      appsecret: appSecret
-    });
-    const options = {
-      hostname: 'openapi.koreainvestment.com',
-      port: 9443,
-      path: '/oauth2/tokenP',
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Content-Length': Buffer.byteLength(postData)
-      },
-      rejectUnauthorized: false
-    };
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          if (json.access_token) resolve(json.access_token);
-          else reject(new Error('Token 발급 실패: ' + JSON.stringify(json)));
-        } catch (e) {
-          reject(e);
-        }
-      });
-    });
-    req.on('error', reject);
-    req.write(postData);
-    req.end();
-  });
 }
 
 function fxBlock(fx) {
@@ -137,12 +99,9 @@ module.exports = async (req, res) => {
     const balanceResult = await getRealPositions(accessToken);
     const positions = balanceResult.positions || {};
 
-    // 잔고 변화 알림 (첫 실행은 스냅샷만 저장)
     try {
       const changeMsg = await checkAndUpdateBalance(balanceResult);
-      if (changeMsg) {
-        await sendMessage(changeMsg);
-      }
+      if (changeMsg) await sendMessage(changeMsg);
     } catch (e) {
       console.error('balance-watch error:', e.message);
     }
@@ -168,7 +127,6 @@ module.exports = async (req, res) => {
       msg += `매수 후 평가·신호가 여기에 표시됩니다.\n\n`;
       msg += dcaBlock();
       msg += formatWatchBlock(watchQuotes, fxRate);
-
       await sendMessage(msg);
       return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
     }
@@ -203,7 +161,6 @@ module.exports = async (req, res) => {
     const totalReturn = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
     let msg = header;
-
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
     msg += `├ 투자원금  <code>$${formatMoney(totalCost)}</code>\n`;
@@ -220,7 +177,6 @@ module.exports = async (req, res) => {
       const icon = e.signals.length ? '🔥' : (e.returnPct >= 0 ? '🟢' : '🔴');
       const days = holdingDaysMap[e.ticker];
       const tc = tradeCountMap[e.ticker];
-
       msg += `${icon} <b>${e.ticker}</b>  ${sign}${e.returnPct}%\n`;
       msg += `    평단 $${formatMoney(e.avgPrice)} → 현재 $${formatMoney(e.current)} | ${e.qty}주\n`;
       msg += `    평가 <code>$${formatMoney(evalAmt)}</code> / 원금 <code>$${formatMoney(cost)}</code>\n`;
@@ -235,9 +191,7 @@ module.exports = async (req, res) => {
     if (actionList.length > 0) {
       msg += `🚨 <b>ACTION REQUIRED</b>\n`;
       for (const e of actionList) {
-        for (const s of e.signals) {
-          msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
-        }
+        for (const s of e.signals) msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
       }
       msg += `\n`;
     } else {
