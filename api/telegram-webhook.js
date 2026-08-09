@@ -1,7 +1,6 @@
 /**
- * 텔레그램 웹훅
- * - 승인/보류 버튼 → 실매도 + 재투자 안내
- * - /port, /status, 포트 → 잔고 요약
+ * 텔레그램 웹훅 — 승인 매도 + /port
+ * 토큰 Redis 캐시
  */
 
 const { sendMessage } = require('../lib/telegram');
@@ -10,6 +9,7 @@ const { getRealPositions } = require('../lib/balance');
 const { buildReinvestPlan, formatReinvestMessage } = require('../lib/reinvest');
 const { addTrade } = require('../lib/store');
 const { getUsdKrwRate } = require('../lib/fx');
+const { getAccessToken } = require('../lib/kis-token');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -27,9 +27,11 @@ function formatFx(n) {
 }
 
 async function buildPortfolioMessage() {
+  const accessToken = await getAccessToken();
+
   let fxLine = '';
   try {
-    const fx = await getUsdKrwRate();
+    const fx = await getUsdKrwRate(accessToken);
     if (fx.ok && fx.rate) {
       const sign = fx.change > 0 ? '+' : '';
       fxLine =
@@ -41,7 +43,7 @@ async function buildPortfolioMessage() {
 
   let balance;
   try {
-    balance = await getRealPositions();
+    balance = await getRealPositions(accessToken);
   } catch (e) {
     return `❌ 잔고 조회 실패\n${e.message}`;
   }
@@ -80,8 +82,7 @@ async function buildPortfolioMessage() {
   const totalPnl = totalEval - totalCost;
   const totalRet = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
-  let msg = `💼 <b>Portfolio</b>\n\n`;
-  msg += fxLine;
+  let msg = `💼 <b>Portfolio</b>\n\n` + fxLine;
   msg += `평가 <code>$${formatMoney(totalEval)}</code>\n`;
   msg += `원금 <code>$${formatMoney(totalCost)}</code>\n`;
   msg += `손익 <code>$${formatMoney(totalPnl)}</code>  (${totalRet >= 0 ? '+' : ''}${totalRet.toFixed(2)}%)\n\n`;
@@ -94,7 +95,6 @@ async function buildPortfolioMessage() {
     msg += `   평단 $${formatMoney(r.avg)} → $${formatMoney(r.cur)} | ${r.qty}주\n`;
     msg += `   평가 $${formatMoney(r.evalAmt)} / 손익 $${formatMoney(r.pnl)}\n`;
   }
-
   msg += `\n⏰ ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`;
   return msg;
 }
@@ -123,14 +123,12 @@ module.exports = async (req, res) => {
     const callback = body.callback_query;
     const message = body.message;
 
-    // ===== 텍스트 명령: /port 등 =====
     if (message && message.text && isPortCommand(message.text)) {
       const msg = await buildPortfolioMessage();
       await sendMessage(msg);
       return res.status(200).json({ ok: true, handled: 'port' });
     }
 
-    // ===== 버튼 콜백 =====
     if (!callback) {
       return res.status(200).json({ ok: true, ignored: true });
     }
@@ -141,11 +139,12 @@ module.exports = async (req, res) => {
 
     if (data.startsWith('approve:')) {
       const ticker = data.split(':')[1];
+      const accessToken = await getAccessToken();
 
       let qty = 0;
       let avgPrice = 0;
       try {
-        const balance = await getRealPositions();
+        const balance = await getRealPositions(accessToken);
         qty = balance.positions?.[ticker]?.qty || 0;
         avgPrice = balance.positions?.[ticker]?.avgPrice || 0;
       } catch (e) {
@@ -156,24 +155,16 @@ module.exports = async (req, res) => {
         reply = `⚠️ <b>${from}</b> 님, <b>${ticker}</b> 보유 수량이 없어 매도할 수 없습니다.`;
       } else {
         const excd = CONFIG.tickers[ticker]?.excd || 'NAS';
-
-        const result = await sellOverseas({
-          ticker,
-          qty,
-          excd,
-          dryRun: false
-        });
+        const result = await sellOverseas({ ticker, qty, excd, dryRun: false });
 
         let fxLine = '';
         try {
-          const fx = await getUsdKrwRate();
+          const fx = await getUsdKrwRate(accessToken);
           if (fx.ok && fx.rate) {
-            const usdValue = avgPrice * qty;
-            const krwApprox = usdValue * fx.rate;
+            const krwApprox = avgPrice * qty * fx.rate;
             fxLine =
               `\n💱 매도 시점 환율 <code>${formatFx(fx.rate)}</code>\n` +
-              `   대략 원화 환산 <code>${Math.round(krwApprox).toLocaleString('ko-KR')}원</code>\n` +
-              `   (스프레드·수수료 미반영)\n`;
+              `   대략 원화 환산 <code>${Math.round(krwApprox).toLocaleString('ko-KR')}원</code>\n`;
           }
         } catch (e) {}
 
@@ -189,10 +180,7 @@ module.exports = async (req, res) => {
               note: result.message || '실매도 주문'
             });
           } catch (e) {}
-
-          const approxProceeds = (avgPrice || 0) * qty;
-          const plan = buildReinvestPlan(approxProceeds, CONFIG.rules?.reinvestDays || 15);
-
+          const plan = buildReinvestPlan((avgPrice || 0) * qty, CONFIG.rules?.reinvestDays || 15);
           reply =
             `✅ <b>${from}</b> 님, <b>${ticker}</b> 실매도 주문 전송\n\n` +
             `📦 수량: ${qty}주\n` +
@@ -203,8 +191,7 @@ module.exports = async (req, res) => {
           reply =
             `❌ <b>${ticker}</b> 매도 주문 실패\n\n` +
             `📝 ${result.message || JSON.stringify(result.raw || result)}\n` +
-            fxLine +
-            `한투 앱에서 주문/잔고를 확인해 주세요.`;
+            fxLine;
         }
       }
     } else if (data === 'hold:all') {
@@ -217,9 +204,7 @@ module.exports = async (req, res) => {
     return res.status(200).json({ ok: true, handled: data });
   } catch (error) {
     console.error('webhook error:', error.message);
-    try {
-      await sendMessage(`❌ 웹훅 오류\n${error.message}`);
-    } catch (e) {}
+    try { await sendMessage(`❌ 웹훅 오류\n${error.message}`); } catch (e) {}
     return res.status(200).json({ ok: false, error: error.message });
   }
 };
