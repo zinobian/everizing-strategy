@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * 승인 버튼: approve:TQQQ:RULE1_TAKE_PROFIT 형식
+ * 대여랏 틱 + 돈 흐름 노출
  */
 
 const { getRealPositions } = require('../lib/balance');
@@ -16,7 +16,12 @@ const { checkAndUpdateBalance } = require('../lib/balance-watch');
 const { getAccessToken } = require('../lib/kis-token');
 const { updateArms } = require('../lib/arming');
 const { waterfill, formatWaterfillMessage } = require('../lib/waterfill');
-const { hostedPrincipalByHost } = require('../lib/hosted-lots');
+const {
+  hostedPrincipalByHost,
+  tickHostedLots,
+  getCashParking,
+  formatMoneyFlowBlock
+} = require('../lib/hosted-lots');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -109,6 +114,15 @@ module.exports = async (req, res) => {
       console.error('balance-watch error:', e.message);
     }
 
+    // 대여랏 일일 틱 (유입·나이·정산 안내)
+    let tickResult = { inflowOrders: [], settleOrders: [], lots: [] };
+    try {
+      tickResult = await tickHostedLots();
+    } catch (e) {
+      console.error('hosted tick error:', e.message);
+    }
+    const cashParking = await getCashParking();
+
     let watchQuotes = [];
     try {
       watchQuotes = await getWatchQuotes(accessToken, appKey, appSecret);
@@ -123,11 +137,18 @@ module.exports = async (req, res) => {
       `🗓 <b>${nowText}</b>\n\n` +
       fxBlock(fx);
 
+    const moneyFlow = formatMoneyFlowBlock(
+      tickResult.lots,
+      cashParking,
+      tickResult.inflowOrders,
+      tickResult.settleOrders
+    );
+
     if (Object.keys(positions).length === 0) {
       let msg = header;
       msg += `💼 <b>Portfolio Summary</b>\n`;
-      msg += `📭 보유 종목 없음\n`;
-      msg += `매수 후 평가·신호가 여기에 표시됩니다.\n\n`;
+      msg += `📭 보유 종목 없음\n\n`;
+      msg += moneyFlow;
       msg += dcaBlock();
       msg += formatWatchBlock(watchQuotes, fxRate);
       await sendMessage(msg);
@@ -197,6 +218,8 @@ module.exports = async (req, res) => {
       msg += `\n`;
     }
     msg += `\n`;
+
+    msg += moneyFlow;
 
     const actionList = evaluations.filter(e => e.primary);
 
