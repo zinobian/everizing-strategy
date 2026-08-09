@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * 대여랏 틱 + 돈 흐름 노출
+ * 대여랏 틱 + 80일 정산 자동 시작 + 돈 흐름
  */
 
 const { getRealPositions } = require('../lib/balance');
@@ -19,6 +19,8 @@ const { waterfill, formatWaterfillMessage } = require('../lib/waterfill');
 const {
   hostedPrincipalByHost,
   tickHostedLots,
+  autoStartSettlements,
+  getHostedLots,
   getCashParking,
   formatMoneyFlowBlock
 } = require('../lib/hosted-lots');
@@ -91,7 +93,6 @@ module.exports = async (req, res) => {
       const year = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).getFullYear();
       await sendMessage(holidayReminderMessage(year));
     }
-
     if (shouldRemindQuarterly(now)) {
       const { year, month } = getKstParts(now);
       await sendMessage(quarterlyReminderMessage(year, month));
@@ -103,7 +104,6 @@ module.exports = async (req, res) => {
 
     const fx = await getUsdKrwRate(accessToken);
     const fxRate = fx?.rate || 0;
-
     const balanceResult = await getRealPositions(accessToken);
     const positions = balanceResult.positions || {};
 
@@ -114,13 +114,29 @@ module.exports = async (req, res) => {
       console.error('balance-watch error:', e.message);
     }
 
-    // 대여랏 일일 틱 (유입·나이·정산 안내)
     let tickResult = { inflowOrders: [], settleOrders: [], lots: [] };
     try {
       tickResult = await tickHostedLots();
     } catch (e) {
       console.error('hosted tick error:', e.message);
     }
+
+    // host 현재가 맵 (정산 판정 + 리포트)
+    const hostPrices = {};
+    for (const t of Object.keys(positions)) {
+      hostPrices[t] = positions[t].currentPrice || positions[t].avgPrice || 0;
+    }
+
+    let started = [];
+    try {
+      started = await autoStartSettlements(hostPrices);
+      if (started.length) {
+        tickResult.lots = await getHostedLots();
+      }
+    } catch (e) {
+      console.error('auto settle error:', e.message);
+    }
+
     const cashParking = await getCashParking();
 
     let watchQuotes = [];
@@ -141,13 +157,13 @@ module.exports = async (req, res) => {
       tickResult.lots,
       cashParking,
       tickResult.inflowOrders,
-      tickResult.settleOrders
+      tickResult.settleOrders,
+      started
     );
 
     if (Object.keys(positions).length === 0) {
       let msg = header;
-      msg += `💼 <b>Portfolio Summary</b>\n`;
-      msg += `📭 보유 종목 없음\n\n`;
+      msg += `💼 <b>Portfolio Summary</b>\n📭 보유 종목 없음\n\n`;
       msg += moneyFlow;
       msg += dcaBlock();
       msg += formatWatchBlock(watchQuotes, fxRate);
@@ -171,9 +187,19 @@ module.exports = async (req, res) => {
       dailies[t] = d;
       const cur = d.lastClose || positions[t]?.currentPrice || 0;
       prices[t] = { price: cur, prevClose: 0, change: 0 };
+      hostPrices[t] = cur || hostPrices[t];
       armMap[t] = await updateArms(t, d, cur);
       await new Promise(r => setTimeout(r, 800));
     }
+
+    // 일봉 가격으로 정산 재판정 (보유 있을 때 더 정확)
+    try {
+      const started2 = await autoStartSettlements(hostPrices);
+      if (started2.length) {
+        started = started2;
+        tickResult.lots = await getHostedLots();
+      }
+    } catch (e) {}
 
     const evaluations = evaluateAll(positions, prices, dailies, armMap);
     evaluations.sort((a, b) => (b.returnPct || 0) - (a.returnPct || 0));
@@ -205,7 +231,6 @@ module.exports = async (req, res) => {
       const days = holdingDaysMap[e.ticker];
       const tc = tradeCountMap[e.ticker];
       const arm = e.arm || {};
-
       msg += `${icon} <b>${e.ticker}</b>  ${sign}${e.returnPct}%\n`;
       msg += `    평단 $${formatMoney(e.avgPrice)} → 현재 $${formatMoney(e.current)} | ${e.qty}주\n`;
       msg += `    평가 <code>$${formatMoney(evalAmt)}</code> / 원금 <code>$${formatMoney(cost)}</code>\n`;
@@ -219,10 +244,15 @@ module.exports = async (req, res) => {
     }
     msg += `\n`;
 
-    msg += moneyFlow;
+    msg += formatMoneyFlowBlock(
+      tickResult.lots,
+      cashParking,
+      tickResult.inflowOrders,
+      tickResult.settleOrders,
+      started
+    );
 
     const actionList = evaluations.filter(e => e.primary);
-
     if (actionList.length > 0) {
       msg += `🚨 <b>ACTION REQUIRED</b> (우선: 규칙3→1/2→4)\n`;
       for (const e of actionList) {
@@ -240,11 +270,8 @@ module.exports = async (req, res) => {
                 currentPrice: prices[t]?.price || positions[t].currentPrice
               };
             }
-            const wf = waterfill(e.ticker, proceeds, posForWf, hostedMap);
-            msg += formatWaterfillMessage(wf);
-          } catch (err) {
-            console.error('wf preview', err.message);
-          }
+            msg += formatWaterfillMessage(waterfill(e.ticker, proceeds, posForWf, hostedMap));
+          } catch (err) {}
         }
       }
       msg += `\n`;
@@ -274,7 +301,7 @@ module.exports = async (req, res) => {
       await sendMessage(msg);
     }
 
-    return res.status(200).json({ success: true, fx, evaluations });
+    return res.status(200).json({ success: true, fx, evaluations, started });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
