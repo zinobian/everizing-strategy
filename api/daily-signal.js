@@ -1,7 +1,7 @@
 /**
  * 에버라이징 일일 신호
  * 순서: 환율 → Portfolio → 승인 → 정액매수 → 3배 순위
- * 거래량: 한글 주수 + 원화 거래대금
+ * + 분기 점검 알림
  */
 
 const https = require('https');
@@ -10,6 +10,7 @@ const { getDailyIndicators } = require('../lib/daily');
 const { evaluateAll } = require('../lib/rules');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
 const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
+const { shouldRemindQuarterly, quarterlyReminderMessage, getKstParts } = require('../lib/quarterly-reminder');
 const { getUsdKrwRate } = require('../lib/fx');
 const { ensureFirstBuyDate, getHoldingDays, getTradeCounts } = require('../lib/store');
 const { getWatchQuotes, formatWatchBlock } = require('../lib/market-watch');
@@ -120,6 +121,11 @@ module.exports = async (req, res) => {
       await sendMessage(holidayReminderMessage(year));
     }
 
+    if (shouldRemindQuarterly(now)) {
+      const { year, month } = getKstParts(now);
+      await sendMessage(quarterlyReminderMessage(year, month));
+    }
+
     const appKey = process.env.KIS_API_KEY;
     const appSecret = process.env.KIS_API_SECRET;
     const accessToken = await getAccessToken(appKey, appSecret);
@@ -144,7 +150,6 @@ module.exports = async (req, res) => {
       `🗓 <b>${nowText}</b>\n\n` +
       fxBlock(fx);
 
-    // ===== 보유 없음 =====
     if (Object.keys(positions).length === 0) {
       let msg = header;
       msg += `💼 <b>Portfolio Summary</b>\n`;
@@ -157,7 +162,6 @@ module.exports = async (req, res) => {
       return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
     }
 
-    // ===== 보유 있음 =====
     const today = now.toISOString().slice(0, 10);
     const tickers = Object.keys(positions);
     const dailies = {};
