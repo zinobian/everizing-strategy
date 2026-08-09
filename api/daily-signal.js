@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * 토큰 Redis 캐시 사용
+ * 무장 갱신 → 규칙3 → 1/2 → 4 판정
  */
 
 const { getRealPositions } = require('../lib/balance');
@@ -14,6 +14,7 @@ const { ensureFirstBuyDate, getHoldingDays, getTradeCounts } = require('../lib/s
 const { getWatchQuotes, formatWatchBlock } = require('../lib/market-watch');
 const { checkAndUpdateBalance } = require('../lib/balance-watch');
 const { getAccessToken } = require('../lib/kis-token');
+const { updateArms } = require('../lib/arming');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -135,6 +136,7 @@ module.exports = async (req, res) => {
     const tickers = Object.keys(positions);
     const dailies = {};
     const prices = {};
+    const armMap = {};
     const holdingDaysMap = {};
     const tradeCountMap = {};
 
@@ -142,13 +144,19 @@ module.exports = async (req, res) => {
       await ensureFirstBuyDate(t, today);
       holdingDaysMap[t] = await getHoldingDays(t);
       tradeCountMap[t] = await getTradeCounts(t);
+
       const d = await getDailyIndicators(t, accessToken, appKey, appSecret);
       dailies[t] = d;
-      prices[t] = { price: d.lastClose || 0, prevClose: 0, change: 0 };
+      const cur = d.lastClose || 0;
+      prices[t] = { price: cur, prevClose: 0, change: 0 };
+
+      // 무장 갱신 후 armMap에 저장
+      armMap[t] = await updateArms(t, d, cur);
+
       await new Promise(r => setTimeout(r, 800));
     }
 
-    const evaluations = evaluateAll(positions, prices, dailies);
+    const evaluations = evaluateAll(positions, prices, dailies, armMap);
     evaluations.sort((a, b) => (b.returnPct || 0) - (a.returnPct || 0));
 
     let totalCost = 0;
@@ -177,6 +185,8 @@ module.exports = async (req, res) => {
       const icon = e.signals.length ? '🔥' : (e.returnPct >= 0 ? '🟢' : '🔴');
       const days = holdingDaysMap[e.ticker];
       const tc = tradeCountMap[e.ticker];
+      const arm = e.arm || {};
+
       msg += `${icon} <b>${e.ticker}</b>  ${sign}${e.returnPct}%\n`;
       msg += `    평단 $${formatMoney(e.avgPrice)} → 현재 $${formatMoney(e.current)} | ${e.qty}주\n`;
       msg += `    평가 <code>$${formatMoney(evalAmt)}</code> / 원금 <code>$${formatMoney(cost)}</code>\n`;
@@ -184,14 +194,20 @@ module.exports = async (req, res) => {
       if (days != null) msg += ` · 투자 ${days}일`;
       if (tc && tc.total > 0) msg += ` · 매매 ${tc.total}회`;
       msg += `\n`;
+      msg += `    무장 손절:${arm.stopArmed ? 'ON' : 'OFF'} ATH:${arm.athArmed ? 'ON' : 'OFF'}`;
+      if (arm.below240Days) msg += ` · 240하회 ${arm.below240Days}일`;
+      msg += `\n`;
     }
     msg += `\n`;
 
-    const actionList = evaluations.filter(e => e.signals.length > 0);
+    // 같은 날 실무: primary(최우선 1개) 기준 승인 버튼
+    const actionList = evaluations.filter(e => e.primary);
+
     if (actionList.length > 0) {
-      msg += `🚨 <b>ACTION REQUIRED</b>\n`;
+      msg += `🚨 <b>ACTION REQUIRED</b> (우선: 규칙3→1/2→4)\n`;
       for (const e of actionList) {
-        for (const s of e.signals) msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
+        const s = e.primary;
+        msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
       }
       msg += `\n`;
     } else {
