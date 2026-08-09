@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * 무장 + 규칙 판정 + 규칙4 워터필 미리보기
+ * 승인 버튼: approve:TQQQ:RULE1_TAKE_PROFIT 형식
  */
 
 const { getRealPositions } = require('../lib/balance');
@@ -205,8 +205,6 @@ module.exports = async (req, res) => {
       for (const e of actionList) {
         const s = e.primary;
         msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
-
-        // 규칙4면 워터필 미리보기
         if (s.type === 'RULE4_ATH_TRAIL') {
           try {
             const proceeds = e.current * e.qty;
@@ -235,10 +233,18 @@ module.exports = async (req, res) => {
     msg += formatWatchBlock(watchQuotes, fxRate);
 
     if (actionList.length > 0) {
-      const buttons = actionList.map(e => ([{
-        text: `✅ ${e.ticker} 처리 승인`,
-        callback_data: `approve:${e.ticker}`
-      }]));
+      const buttons = actionList.map(e => {
+        const ruleType = e.primary?.type || 'UNKNOWN';
+        const short =
+          ruleType.includes('BREAK') ? '손절3' :
+          ruleType.includes('RULE2') ? '익절2' :
+          ruleType.includes('RULE1') ? '익절1' :
+          ruleType.includes('ATH') ? 'ATH4' : '승인';
+        return [{
+          text: `✅ ${e.ticker} ${short}`,
+          callback_data: `approve:${e.ticker}:${ruleType}`
+        }];
+      });
       buttons.push([{ text: '⏸ 전체 보류', callback_data: 'hold:all' }]);
       await sendMessageWithButtons(msg, buttons);
     } else {
