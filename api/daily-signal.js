@@ -1,7 +1,7 @@
 /**
  * 에버라이징 일일 신호
- * 순서: 환율 → Portfolio → 승인 → 정액매수 → 3배 순위
- * + 분기 점검 알림
+ * 환율 → Portfolio → 승인 → 정액매수 → 3배 순위
+ * + 분기 알림 + 잔고 변화 알림
  */
 
 const https = require('https');
@@ -14,6 +14,7 @@ const { shouldRemindQuarterly, quarterlyReminderMessage, getKstParts } = require
 const { getUsdKrwRate } = require('../lib/fx');
 const { ensureFirstBuyDate, getHoldingDays, getTradeCounts } = require('../lib/store');
 const { getWatchQuotes, formatWatchBlock } = require('../lib/market-watch');
+const { checkAndUpdateBalance } = require('../lib/balance-watch');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -135,6 +136,16 @@ module.exports = async (req, res) => {
 
     const balanceResult = await getRealPositions(accessToken);
     const positions = balanceResult.positions || {};
+
+    // 잔고 변화 알림 (첫 실행은 스냅샷만 저장)
+    try {
+      const changeMsg = await checkAndUpdateBalance(balanceResult);
+      if (changeMsg) {
+        await sendMessage(changeMsg);
+      }
+    } catch (e) {
+      console.error('balance-watch error:', e.message);
+    }
 
     let watchQuotes = [];
     try {
