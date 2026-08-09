@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * + 환율 + 정액매수 + 포지션 + 투자일수 + 관심 레버리지 시세
+ * 순서: 환율 → Portfolio → 승인 → 정액매수 → 3배 순위
  */
 
 const https = require('https');
@@ -39,7 +39,6 @@ function getAccessToken(appKey, appSecret) {
       appkey: appKey,
       appsecret: appSecret
     });
-
     const options = {
       hostname: 'openapi.koreainvestment.com',
       port: 9443,
@@ -51,7 +50,6 @@ function getAccessToken(appKey, appSecret) {
       },
       rejectUnauthorized: false
     };
-
     const req = https.request(options, (res) => {
       let data = '';
       res.on('data', chunk => data += chunk);
@@ -65,7 +63,6 @@ function getAccessToken(appKey, appSecret) {
         }
       });
     });
-
     req.on('error', reject);
     req.write(postData);
     req.end();
@@ -91,7 +88,6 @@ function dcaBlock() {
   const tickers = CONFIG.tickers || {};
   const keys = Object.keys(tickers);
   if (keys.length === 0) return '';
-
   let total = 0;
   let lines = `💵 <b>정액매수 (일일)</b>\n`;
   for (const t of keys) {
@@ -131,7 +127,7 @@ module.exports = async (req, res) => {
     const balanceResult = await getRealPositions(accessToken);
     const positions = balanceResult.positions || {};
 
-    // 관심 레버리지 시세 (토큰 재사용)
+    // 순위 (시간 소요)
     let watchQuotes = [];
     try {
       watchQuotes = await getWatchQuotes(accessToken, appKey, appSecret);
@@ -139,22 +135,27 @@ module.exports = async (req, res) => {
       console.error('watch error:', e.message);
     }
 
+    const header =
+      `━━━━━━━━━━━━━━━━━━\n` +
+      `📈 <b>EVERIZING DAILY REPORT</b>\n` +
+      `━━━━━━━━━━━━━━━━━━\n\n` +
+      `🗓 <b>${nowText}</b>\n\n` +
+      fxBlock(fx);
+
+    // ===== 보유 없음 =====
     if (Object.keys(positions).length === 0) {
-      await sendMessage(
-        `━━━━━━━━━━━━━━━━━━\n` +
-        `📈 <b>EVERIZING DAILY REPORT</b>\n` +
-        `━━━━━━━━━━━━━━━━━━\n\n` +
-        `🗓 <b>${nowText}</b>\n\n` +
-        fxBlock(fx) +
-        dcaBlock() +
-        formatWatchBlock(watchQuotes) +
-        `📭 <b>보유 종목 없음</b>\n` +
-        `현재 계좌에 주식이 없습니다.\n` +
-        `매수 후 자동으로 신호 분석이 시작됩니다.`
-      );
-      return res.status(200).json({ success: true, message: '보유 종목 없음', fx, watchQuotes });
+      let msg = header;
+      msg += `💼 <b>Portfolio Summary</b>\n`;
+      msg += `📭 보유 종목 없음\n`;
+      msg += `매수 후 평가·신호가 여기에 표시됩니다.\n\n`;
+      msg += dcaBlock();
+      msg += formatWatchBlock(watchQuotes);
+
+      await sendMessage(msg);
+      return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
     }
 
+    // ===== 보유 있음 =====
     const today = now.toISOString().slice(0, 10);
     const tickers = Object.keys(positions);
     const dailies = {};
@@ -166,7 +167,6 @@ module.exports = async (req, res) => {
       await ensureFirstBuyDate(t, today);
       holdingDaysMap[t] = await getHoldingDays(t);
       tradeCountMap[t] = await getTradeCounts(t);
-
       const d = await getDailyIndicators(t, accessToken, appKey, appSecret);
       dailies[t] = d;
       prices[t] = { price: d.lastClose || 0, prevClose: 0, change: 0 };
@@ -174,6 +174,8 @@ module.exports = async (req, res) => {
     }
 
     const evaluations = evaluateAll(positions, prices, dailies);
+    // 수익률 높은 순
+    evaluations.sort((a, b) => (b.returnPct || 0) - (a.returnPct || 0));
 
     let totalCost = 0;
     let totalEval = 0;
@@ -184,14 +186,7 @@ module.exports = async (req, res) => {
     const totalPnl = totalEval - totalCost;
     const totalReturn = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
-    let msg = '';
-    msg += `━━━━━━━━━━━━━━━━━━\n`;
-    msg += `📈 <b>EVERIZING DAILY REPORT</b>\n`;
-    msg += `━━━━━━━━━━━━━━━━━━\n\n`;
-    msg += `🗓 <b>${nowText}</b>\n\n`;
-    msg += fxBlock(fx);
-    msg += dcaBlock();
-    msg += formatWatchBlock(watchQuotes);
+    let msg = header;
 
     msg += `💼 <b>Portfolio Summary</b>\n`;
     msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
@@ -199,7 +194,7 @@ module.exports = async (req, res) => {
     msg += `├ 평가손익  <code>$${formatMoney(totalPnl)}</code>\n`;
     msg += `└ 수익률    <b>${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%</b>\n\n`;
 
-    msg += `📋 <b>Positions</b>\n`;
+    msg += `📋 <b>Positions (수익률순)</b>\n`;
     for (const e of evaluations) {
       const cost = e.avgPrice * e.qty;
       const evalAmt = e.current * e.qty;
@@ -221,29 +216,33 @@ module.exports = async (req, res) => {
     msg += `\n`;
 
     const actionList = evaluations.filter(e => e.signals.length > 0);
-
     if (actionList.length > 0) {
-      msg += `🚨 <b>ACTION REQUIRED</b>\n\n`;
+      msg += `🚨 <b>ACTION REQUIRED</b>\n`;
       for (const e of actionList) {
         for (const s of e.signals) {
           msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
         }
       }
-      msg += `\n아래에서 선택해 주세요.`;
+      msg += `\n`;
+    } else {
+      msg += `✨ <b>No Exit Signal</b>\n현재 조치할 신호가 없습니다.\n\n`;
+    }
 
+    msg += dcaBlock();
+    msg += formatWatchBlock(watchQuotes);
+
+    if (actionList.length > 0) {
       const buttons = actionList.map(e => ([{
         text: `✅ ${e.ticker} 처리 승인`,
         callback_data: `approve:${e.ticker}`
       }]));
       buttons.push([{ text: '⏸ 전체 보류', callback_data: 'hold:all' }]);
-
       await sendMessageWithButtons(msg, buttons);
     } else {
-      msg += `✨ <b>No Exit Signal</b>\n현재 조치할 신호가 없습니다.`;
       await sendMessage(msg);
     }
 
-    return res.status(200).json({ success: true, fx, evaluations, watchQuotes });
+    return res.status(200).json({ success: true, fx, evaluations });
   } catch (error) {
     console.error('daily-signal 오류:', error.message);
     try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
