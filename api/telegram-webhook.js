@@ -1,13 +1,21 @@
 /**
- * 승인 → 실매도 + 매매 기록 + 재투자 안내
+ * 승인 → 실매도 + 매매 기록 + 환율 + 재투자 안내
  */
 
 const { sendMessage } = require('../lib/telegram');
 const { sellOverseas } = require('../lib/order');
 const { getRealPositions } = require('../lib/balance');
 const { buildReinvestPlan, formatReinvestMessage } = require('../lib/reinvest');
-const { addTrade, ensureFirstBuyDate } = require('../lib/store');
+const { addTrade } = require('../lib/store');
+const { getUsdKrwRate } = require('../lib/fx');
 const CONFIG = require('../lib/config');
+
+function formatFx(n) {
+  return Number(n).toLocaleString('ko-KR', {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
 
 module.exports = async (req, res) => {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -50,8 +58,20 @@ module.exports = async (req, res) => {
           dryRun: false
         });
 
+        let fxLine = '';
+        try {
+          const fx = await getUsdKrwRate();
+          if (fx.ok && fx.rate) {
+            const usdValue = avgPrice * qty;
+            const krwApprox = usdValue * fx.rate;
+            fxLine =
+              `\n💱 매도 시점 환율 <code>${formatFx(fx.rate)}</code>\n` +
+              `   대략 원화 환산 <code>${Math.round(krwApprox).toLocaleString('ko-KR')}원</code>\n` +
+              `   (스프레드·수수료 미반영)\n`;
+          }
+        } catch (e) {}
+
         if (result.success) {
-          // 매매 이력 기록 (메모리/추후 Redis)
           try {
             await addTrade({
               date: new Date().toISOString().slice(0, 10),
@@ -71,11 +91,13 @@ module.exports = async (req, res) => {
             `✅ <b>${from}</b> 님, <b>${ticker}</b> 실매도 주문 전송\n\n` +
             `📦 수량: ${qty}주\n` +
             `📝 ${result.message || '주문 요청 완료'}\n` +
+            fxLine +
             formatReinvestMessage(ticker, plan);
         } else {
           reply =
             `❌ <b>${ticker}</b> 매도 주문 실패\n\n` +
             `📝 ${result.message || JSON.stringify(result.raw || result)}\n` +
+            fxLine +
             `한투 앱에서 주문/잔고를 확인해 주세요.`;
         }
       }
