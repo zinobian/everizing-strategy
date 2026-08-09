@@ -1,6 +1,6 @@
 /**
- * 텔레그램 웹훅 — 승인 매도 + /port
- * 토큰 Redis 캐시
+ * 텔레그램 웹훅
+ * 승인 매도 + 규칙4 워터필링/대여랏 + /port
  */
 
 const { sendMessage } = require('../lib/telegram');
@@ -10,6 +10,9 @@ const { buildReinvestPlan, formatReinvestMessage } = require('../lib/reinvest');
 const { addTrade } = require('../lib/store');
 const { getUsdKrwRate } = require('../lib/fx');
 const { getAccessToken } = require('../lib/kis-token');
+const { waterfill, formatWaterfillMessage } = require('../lib/waterfill');
+const { createHostedLotsFromWaterfill, hostedPrincipalByHost } = require('../lib/hosted-lots');
+const { disarmStop, disarmAth } = require('../lib/arming');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -143,10 +146,14 @@ module.exports = async (req, res) => {
 
       let qty = 0;
       let avgPrice = 0;
+      let currentPrice = 0;
+      let positions = {};
       try {
         const balance = await getRealPositions(accessToken);
-        qty = balance.positions?.[ticker]?.qty || 0;
-        avgPrice = balance.positions?.[ticker]?.avgPrice || 0;
+        positions = balance.positions || {};
+        qty = positions[ticker]?.qty || 0;
+        avgPrice = positions[ticker]?.avgPrice || 0;
+        currentPrice = positions[ticker]?.currentPrice || avgPrice;
       } catch (e) {
         qty = 0;
       }
@@ -161,7 +168,7 @@ module.exports = async (req, res) => {
         try {
           const fx = await getUsdKrwRate(accessToken);
           if (fx.ok && fx.rate) {
-            const krwApprox = avgPrice * qty * fx.rate;
+            const krwApprox = (currentPrice || avgPrice) * qty * fx.rate;
             fxLine =
               `\n💱 매도 시점 환율 <code>${formatFx(fx.rate)}</code>\n` +
               `   대략 원화 환산 <code>${Math.round(krwApprox).toLocaleString('ko-KR')}원</code>\n`;
@@ -169,6 +176,8 @@ module.exports = async (req, res) => {
         } catch (e) {}
 
         if (result.success) {
+          const proceeds = (currentPrice || avgPrice || 0) * qty;
+
           try {
             await addTrade({
               date: new Date().toISOString().slice(0, 10),
@@ -176,17 +185,42 @@ module.exports = async (req, res) => {
               rule: 'APPROVE_SELL',
               side: 'sell',
               qty,
-              price: avgPrice,
+              price: currentPrice || avgPrice,
               note: result.message || '실매도 주문'
             });
           } catch (e) {}
-          const plan = buildReinvestPlan((avgPrice || 0) * qty, CONFIG.rules?.reinvestDays || 15);
+
+          // 기본: 15일 자기 재투자 안내
+          const plan = buildReinvestPlan(proceeds, CONFIG.rules?.reinvestDays || 15);
+
           reply =
             `✅ <b>${from}</b> 님, <b>${ticker}</b> 실매도 주문 전송\n\n` +
             `📦 수량: ${qty}주\n` +
             `📝 ${result.message || '주문 요청 완료'}\n` +
-            fxLine +
-            formatReinvestMessage(ticker, plan);
+            fxLine;
+
+          // 규칙4 형태 배분 시도 (워터필링) — 승인 시점에는 매도 후 분배 기록
+          // primary가 RULE4였는지는 콜백에 없으므로, 워터필링은 "분배 옵션"으로 항상 계산해 안내
+          // 실제 규칙 구분은 리포트 primary 기준; 여기서는 매도 후 재투자 기본 + 워터필 미리보기
+          try {
+            const hostedMap = await hostedPrincipalByHost();
+            const wf = waterfill(ticker, proceeds, positions, hostedMap);
+            if (wf.allocations.length > 0 || wf.parking > 0) {
+              await createHostedLotsFromWaterfill(wf);
+              reply += formatWaterfillMessage(wf);
+              reply += `\n(규칙4 경로와 동일하게 대여랏 기록됨. 규칙1·2·3 익절/손절이면 자기 15일 재투자를 우선하세요.)\n`;
+            }
+          } catch (e) {
+            console.error('waterfill error', e.message);
+          }
+
+          reply += formatReinvestMessage(ticker, plan);
+
+          // 무장 해제는 보수적으로: 손절/ATH 모두 호출 가능 상태면 리포트에서 재무장
+          try {
+            await disarmStop(ticker);
+            await disarmAth(ticker);
+          } catch (e) {}
         } else {
           reply =
             `❌ <b>${ticker}</b> 매도 주문 실패\n\n` +
