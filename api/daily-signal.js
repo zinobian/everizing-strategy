@@ -1,6 +1,6 @@
 /**
  * 에버라이징 일일 신호
- * 무장 갱신 → 규칙3 → 1/2 → 4 판정
+ * 무장 + 규칙 판정 + 규칙4 워터필 미리보기
  */
 
 const { getRealPositions } = require('../lib/balance');
@@ -15,6 +15,8 @@ const { getWatchQuotes, formatWatchBlock } = require('../lib/market-watch');
 const { checkAndUpdateBalance } = require('../lib/balance-watch');
 const { getAccessToken } = require('../lib/kis-token');
 const { updateArms } = require('../lib/arming');
+const { waterfill, formatWaterfillMessage } = require('../lib/waterfill');
+const { hostedPrincipalByHost } = require('../lib/hosted-lots');
 const CONFIG = require('../lib/config');
 
 function formatMoney(n) {
@@ -144,15 +146,11 @@ module.exports = async (req, res) => {
       await ensureFirstBuyDate(t, today);
       holdingDaysMap[t] = await getHoldingDays(t);
       tradeCountMap[t] = await getTradeCounts(t);
-
       const d = await getDailyIndicators(t, accessToken, appKey, appSecret);
       dailies[t] = d;
-      const cur = d.lastClose || 0;
+      const cur = d.lastClose || positions[t]?.currentPrice || 0;
       prices[t] = { price: cur, prevClose: 0, change: 0 };
-
-      // 무장 갱신 후 armMap에 저장
       armMap[t] = await updateArms(t, d, cur);
-
       await new Promise(r => setTimeout(r, 800));
     }
 
@@ -200,7 +198,6 @@ module.exports = async (req, res) => {
     }
     msg += `\n`;
 
-    // 같은 날 실무: primary(최우선 1개) 기준 승인 버튼
     const actionList = evaluations.filter(e => e.primary);
 
     if (actionList.length > 0) {
@@ -208,6 +205,26 @@ module.exports = async (req, res) => {
       for (const e of actionList) {
         const s = e.primary;
         msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
+
+        // 규칙4면 워터필 미리보기
+        if (s.type === 'RULE4_ATH_TRAIL') {
+          try {
+            const proceeds = e.current * e.qty;
+            const hostedMap = await hostedPrincipalByHost();
+            const posForWf = {};
+            for (const t of Object.keys(positions)) {
+              posForWf[t] = {
+                qty: positions[t].qty,
+                avgPrice: positions[t].avgPrice,
+                currentPrice: prices[t]?.price || positions[t].currentPrice
+              };
+            }
+            const wf = waterfill(e.ticker, proceeds, posForWf, hostedMap);
+            msg += formatWaterfillMessage(wf);
+          } catch (err) {
+            console.error('wf preview', err.message);
+          }
+        }
       }
       msg += `\n`;
     } else {
