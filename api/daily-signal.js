@@ -1,6 +1,7 @@
 /**
  * 에버라이징 일일 신호
  * 순서: 환율 → Portfolio → 승인 → 정액매수 → 3배 순위
+ * 거래량: 한글 주수 + 원화 거래대금
  */
 
 const https = require('https');
@@ -124,10 +125,11 @@ module.exports = async (req, res) => {
     const accessToken = await getAccessToken(appKey, appSecret);
 
     const fx = await getUsdKrwRate(accessToken);
+    const fxRate = fx?.rate || 0;
+
     const balanceResult = await getRealPositions(accessToken);
     const positions = balanceResult.positions || {};
 
-    // 순위 (시간 소요)
     let watchQuotes = [];
     try {
       watchQuotes = await getWatchQuotes(accessToken, appKey, appSecret);
@@ -149,7 +151,7 @@ module.exports = async (req, res) => {
       msg += `📭 보유 종목 없음\n`;
       msg += `매수 후 평가·신호가 여기에 표시됩니다.\n\n`;
       msg += dcaBlock();
-      msg += formatWatchBlock(watchQuotes);
+      msg += formatWatchBlock(watchQuotes, fxRate);
 
       await sendMessage(msg);
       return res.status(200).json({ success: true, message: '보유 종목 없음', fx });
@@ -174,7 +176,6 @@ module.exports = async (req, res) => {
     }
 
     const evaluations = evaluateAll(positions, prices, dailies);
-    // 수익률 높은 순
     evaluations.sort((a, b) => (b.returnPct || 0) - (a.returnPct || 0));
 
     let totalCost = 0;
@@ -229,7 +230,7 @@ module.exports = async (req, res) => {
     }
 
     msg += dcaBlock();
-    msg += formatWatchBlock(watchQuotes);
+    msg += formatWatchBlock(watchQuotes, fxRate);
 
     if (actionList.length > 0) {
       const buttons = actionList.map(e => ([{
