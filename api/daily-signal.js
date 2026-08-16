@@ -156,6 +156,29 @@ function resolveAsOf(seriesMap) {
   return maxD || new Date();
 }
 
+/** 텔레그램 4096자 제한 → 나눠 전송 */
+async function sendTelegramSafe(text) {
+  const MAX = 3500;
+  const chunks = [];
+  if (text.length <= MAX) {
+    chunks.push(text);
+  } else {
+    let rest = text;
+    while (rest.length > 0) {
+      chunks.push(rest.slice(0, MAX));
+      rest = rest.slice(MAX);
+    }
+  }
+
+  const results = [];
+  for (const chunk of chunks) {
+    const r = await sendMessage(chunk);
+    results.push(r);
+    await sleep(300);
+  }
+  return results;
+}
+
 module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
@@ -180,34 +203,40 @@ module.exports = async (req, res) => {
     const topN = CONFIG.RANK_TOP || 10;
 
     const msg = [
-      `📋 한투 시세 리포트`,
+      `한투 시세 리포트`,
       `기준: ${labels.day}`,
       ``,
       formatCash(fx),
       ``,
       formatHoldings(positions),
       ``,
-      `📊 미국 레버리지 수익률 TOP${topN}`,
-      formatRankBlock('• 일', labels.day, ranks.returnRank.day),
-      formatRankBlock('• 주', labels.week, ranks.returnRank.week),
-      formatRankBlock('• 월', labels.month, ranks.returnRank.month),
-      formatRankBlock('• 연', labels.year, ranks.returnRank.year),
+      `미국 레버리지 수익률 TOP${topN}`,
+      formatRankBlock('일', labels.day, ranks.returnRank.day),
+      formatRankBlock('주', labels.week, ranks.returnRank.week),
+      formatRankBlock('월', labels.month, ranks.returnRank.month),
+      formatRankBlock('연', labels.year, ranks.returnRank.year),
       ``,
-      `💰 거래대금 증감 TOP${topN}`,
-      formatRankBlock('• 일', labels.day, ranks.volumeRank.day),
-      formatRankBlock('• 주', labels.week, ranks.volumeRank.week),
-      formatRankBlock('• 월', labels.month, ranks.volumeRank.month),
-      formatRankBlock('• 연', labels.year, ranks.volumeRank.year),
+      `거래대금 증감 TOP${topN}`,
+      formatRankBlock('일', labels.day, ranks.volumeRank.day),
+      formatRankBlock('주', labels.week, ranks.volumeRank.week),
+      formatRankBlock('월', labels.month, ranks.volumeRank.month),
+      formatRankBlock('연', labels.year, ranks.volumeRank.year),
     ].join('\n');
 
+    let telegram = null;
+    let telegramError = null;
     try {
-      await sendMessage(msg);
+      telegram = await sendTelegramSafe(msg);
     } catch (e) {
+      telegramError = e.message;
       console.error('telegram', e.message);
     }
 
     res.status(200).json({
       success: true,
+      telegramOk: !telegramError,
+      telegramError,
+      telegram,
       labels: {
         day: labels.day,
         week: labels.week,
@@ -218,6 +247,7 @@ module.exports = async (req, res) => {
       volumeRank: ranks.volumeRank,
       positionCount: Object.keys(positions).length,
       fx: { rate: fx.rate, changePct: fx.changePct },
+      msgLength: msg.length,
     });
   } catch (e) {
     console.error(e);
