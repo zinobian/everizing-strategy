@@ -1,18 +1,20 @@
 /**
- * 한투 봇 — 일일 시세·잔고·3배 순위 (에버라이징 매매 규칙 없음)
- * Vercel: /api/daily-signal
+ * 한투 봇 — 시세·잔고·3배 순위 전용 (에버라이징 매매 규칙 없음)
  */
+const https = require('https');
 const CONFIG = require('../lib/config');
 const { periodLabels, parseYmd } = require('../lib/period-labels');
 const { buildRankings } = require('../lib/rankings');
-const kis = require('./kis');
+const { getAccessToken } = require('../lib/kis-token');
+const { getUsdKrwRate } = require('../lib/fx');
+const { getRealPositions } = require('../lib/balance');
+const { sendMessage } = require('../lib/telegram');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 function fmtPct(v) {
   if (v == null || Number.isNaN(v)) return '-';
-  const s = v >= 0 ? `+${v}` : `${v}`;
-  return `${s}%`;
+  return (v >= 0 ? `+${v}` : `${v}`) + '%';
 }
 
 function formatRankBlock(title, periodText, list) {
@@ -22,46 +24,125 @@ function formatRankBlock(title, periodText, list) {
   return `${title} (${periodText})\n${lines}`;
 }
 
-function formatHoldings(balance) {
-  if (!balance || !balance.positions || !balance.positions.length) {
-    return '📦 보유 종목\n  없음';
-  }
-  const lines = balance.positions.map((p) => {
-    const pnl = p.returnPct != null ? fmtPct(p.returnPct) : '';
-    return `  ${p.ticker} ${p.qty}주 · 평가 ${Number(p.evalAmount || 0).toLocaleString()} · ${pnl}`;
+function formatHoldings(positions) {
+  const keys = Object.keys(positions || {});
+  if (!keys.length) return '📦 보유 종목\n  없음';
+  const lines = keys.map((t) => {
+    const p = positions[t];
+    return `  ${t} ${p.qty}주 · 평단 ${p.avgPrice}`;
   });
   return `📦 보유 종목\n${lines.join('\n')}`;
 }
 
-function formatCash(balance, fx) {
-  const krw =
-    balance?.cashKrw != null ? Number(balance.cashKrw).toLocaleString() : '-';
-  const usd =
-    balance?.cashUsd != null ? Number(balance.cashUsd).toLocaleString() : '-';
+function formatCash(fx) {
   const rate =
     fx && fx.rate != null
       ? `${fx.rate} (전일대비 ${fx.changePct != null ? fmtPct(fx.changePct) : '-'})`
       : '-';
-  return `💵 현금·환율\n  원화: ${krw}\n  달러: ${usd}\n  환율: ${rate}`;
+  return `💵 환율\n  USD/KRW: ${rate}`;
+}
+
+function httpsGetJson(path, token, appKey, appSecret, trId) {
+  return new Promise((resolve, reject) => {
+    const options = {
+      hostname: 'openapi.koreainvestment.com',
+      port: 9443,
+      path,
+      method: 'GET',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        appkey: appKey,
+        appsecret: appSecret,
+        tr_id: trId,
+      },
+      rejectUnauthorized: false,
+    };
+    const req = https.request(options, (res) => {
+      let data = '';
+      res.on('data', (c) => (data += c));
+      res.on('end', () => {
+        try {
+          resolve(JSON.parse(data));
+        } catch (e) {
+          reject(e);
+        }
+      });
+    });
+    req.on('error', reject);
+    req.end();
+  });
+}
+
+function normalizeDaily(raw) {
+  const rows = raw.output2 || raw.output || [];
+  if (!Array.isArray(rows)) return [];
+  return rows
+    .map((r) => ({
+      date: r.xymd || r.date || '',
+      close: parseFloat(r.clos || r.close || r.last || 0),
+      volume: parseFloat(r.tvol || r.volume || 0),
+      amount: parseFloat(r.tamt || 0) || undefined,
+    }))
+    .filter((r) => r.close > 0 && r.date);
+}
+
+function shiftDateYYYYMMDD(yyyymmdd, daysBack) {
+  if (!yyyymmdd || yyyymmdd.length !== 8) return '';
+  const y = parseInt(yyyymmdd.slice(0, 4), 10);
+  const m = parseInt(yyyymmdd.slice(4, 6), 10) - 1;
+  const d = parseInt(yyyymmdd.slice(6, 8), 10);
+  const dt = new Date(Date.UTC(y, m, d));
+  dt.setUTCDate(dt.getUTCDate() - daysBack);
+  const yy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(dt.getUTCDate()).padStart(2, '0');
+  return `${yy}${mm}${dd}`;
+}
+
+async function fetchDailyBars(token, ticker, excd) {
+  const appKey = process.env.KIS_API_KEY;
+  const appSecret = process.env.KIS_API_SECRET;
+  let all = [];
+  let bymd = '';
+
+  for (let i = 0; i < 3; i++) {
+    const path =
+      `/uapi/overseas-price/v1/quotations/dailyprice` +
+      `?AUTH=&EXCD=${excd}&SYMB=${ticker}&GUBN=0&BYMD=${bymd}&MODP=1`;
+    const raw = await httpsGetJson(path, token, appKey, appSecret, 'HHDFS76240000');
+    if (raw.rt_cd !== '0') break;
+    const part = normalizeDaily(raw);
+    if (!part.length) break;
+    all = all.concat(part);
+    const oldest = part[part.length - 1]?.date || part[0]?.date;
+    if (!oldest) break;
+    bymd = shiftDateYYYYMMDD(oldest, 1);
+    await sleep(CONFIG.API_GAP_MS || 350);
+  }
+
+  const map = {};
+  for (const d of all) map[d.date] = d;
+  return Object.values(map).sort((a, b) => String(a.date).localeCompare(String(b.date)));
 }
 
 async function fetchAllBars(token) {
-  const map = {};
-  for (const item of CONFIG.WATCH_LIST) {
+  const seriesMap = {};
+  const list = CONFIG.WATCH_LIST || [];
+  for (const item of list) {
     try {
-      const bars = await kis.fetchDailyBars(
+      seriesMap[item.ticker] = await fetchDailyBars(
         token,
         item.ticker,
         item.excd || 'NAS'
       );
-      map[item.ticker] = bars || [];
     } catch (e) {
       console.error('bars fail', item.ticker, e.message);
-      map[item.ticker] = [];
+      seriesMap[item.ticker] = [];
     }
     await sleep(CONFIG.API_GAP_MS || 350);
   }
-  return map;
+  return seriesMap;
 }
 
 function resolveAsOf(seriesMap) {
@@ -78,19 +159,15 @@ function resolveAsOf(seriesMap) {
 module.exports = async (req, res) => {
   res.setHeader('Content-Type', 'application/json');
   try {
-    const token = await kis.getAccessToken();
+    const token = await getAccessToken();
 
-    let fx = { rate: null, changePct: null };
-    try {
-      fx = await kis.fetchFx(token);
-    } catch (e) {
-      console.error('fx', e.message);
-    }
+    const fx = await getUsdKrwRate(token);
     await sleep(CONFIG.API_GAP_MS || 350);
 
-    let balance = { cashKrw: null, cashUsd: null, positions: [] };
+    let positions = {};
     try {
-      balance = await kis.fetchOverseasBalance(token);
+      const bal = await getRealPositions(token);
+      positions = bal.positions || {};
     } catch (e) {
       console.error('balance', e.message);
     }
@@ -100,32 +177,33 @@ module.exports = async (req, res) => {
     const asOf = resolveAsOf(seriesMap);
     const labels = periodLabels(asOf);
     const ranks = buildRankings(seriesMap, labels);
+    const topN = CONFIG.RANK_TOP || 10;
 
     const msg = [
       `📋 한투 시세 리포트`,
       `기준: ${labels.day}`,
       ``,
-      formatCash(balance, fx),
+      formatCash(fx),
       ``,
-      formatHoldings(balance),
+      formatHoldings(positions),
       ``,
-      `📊 미국 레버리지 수익률 TOP${CONFIG.RANK_TOP || 10}`,
+      `📊 미국 레버리지 수익률 TOP${topN}`,
       formatRankBlock('• 일', labels.day, ranks.returnRank.day),
       formatRankBlock('• 주', labels.week, ranks.returnRank.week),
       formatRankBlock('• 월', labels.month, ranks.returnRank.month),
       formatRankBlock('• 연', labels.year, ranks.returnRank.year),
       ``,
-      `💰 거래대금 증감 TOP${CONFIG.RANK_TOP || 10}`,
+      `💰 거래대금 증감 TOP${topN}`,
       formatRankBlock('• 일', labels.day, ranks.volumeRank.day),
       formatRankBlock('• 주', labels.week, ranks.volumeRank.week),
       formatRankBlock('• 월', labels.month, ranks.volumeRank.month),
       formatRankBlock('• 연', labels.year, ranks.volumeRank.year),
     ].join('\n');
 
-    if (typeof kis.sendTelegram === 'function') {
-      await kis.sendTelegram(msg);
-    } else if (typeof kis.sendMessage === 'function') {
-      await kis.sendMessage(msg);
+    try {
+      await sendMessage(msg);
+    } catch (e) {
+      console.error('telegram', e.message);
     }
 
     res.status(200).json({
@@ -138,11 +216,8 @@ module.exports = async (req, res) => {
       },
       returnRank: ranks.returnRank,
       volumeRank: ranks.volumeRank,
-      balanceSummary: {
-        cashKrw: balance.cashKrw,
-        cashUsd: balance.cashUsd,
-        positionCount: (balance.positions || []).length,
-      },
+      positionCount: Object.keys(positions).length,
+      fx: { rate: fx.rate, changePct: fx.changePct },
     });
   } catch (e) {
     console.error(e);
