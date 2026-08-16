@@ -1,322 +1,152 @@
 /**
- * 에버라이징 일일 신호
- * 미국 거래일에만 대여랏 틱
+ * 한투 봇 — 일일 시세·잔고·3배 순위 (에버라이징 매매 규칙 없음)
+ * Vercel: /api/daily-signal
  */
-
-const { getRealPositions } = require('../lib/balance');
-const { getDailyIndicators } = require('../lib/daily');
-const { evaluateAll } = require('../lib/rules');
-const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
-const { shouldRemindHolidayUpdate, holidayReminderMessage } = require('../lib/holiday-reminder');
-const { shouldRemindQuarterly, quarterlyReminderMessage, getKstParts } = require('../lib/quarterly-reminder');
-const { getUsdKrwRate } = require('../lib/fx');
-const { ensureFirstBuyDate, getHoldingDays, getTradeCounts } = require('../lib/store');
-const { getWatchQuotes, formatWatchBlock } = require('../lib/market-watch');
-const { checkAndUpdateBalance } = require('../lib/balance-watch');
-const { getAccessToken } = require('../lib/kis-token');
-const { updateArms } = require('../lib/arming');
-const { waterfill, formatWaterfillMessage } = require('../lib/waterfill');
-const {
-  hostedPrincipalByHost,
-  tickHostedLots,
-  autoStartSettlements,
-  getHostedLots,
-  getCashParking,
-  formatMoneyFlowBlock
-} = require('../lib/hosted-lots');
-const { isUsTradingDay } = require('../lib/trading-day');
 const CONFIG = require('../lib/config');
+const { periodLabels, parseYmd } = require('../lib/period-labels');
+const { buildRankings, toNum } = require('../lib/rankings');
 
-function formatMoney(n) {
-  return Number(n).toLocaleString('en-US', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
+// ----- 프로젝트에 맞게 경로만 조정 -----
+// 예: const { getAccessToken } = require('../lib/kis-auth');
+//     const { getOverseasPrice, getDailyBars, getFx, getBalance } = require('../lib/kis');
+const kis = require('../lib/kis'); // getAccessToken, fetchDailyBars, fetchPrice, fetchFx, fetchOverseasBalance, sendTelegram
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function fmtPct(v) {
+  if (v == null || Number.isNaN(v)) return '-';
+  const s = v >= 0 ? `+${v}` : `${v}`;
+  return `${s}%`;
 }
 
-function formatFx(n) {
-  return Number(n).toLocaleString('ko-KR', {
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2
-  });
+function formatRankBlock(title, periodText, list) {
+  const lines = list.length
+    ? list.map((x) => `  ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`).join('\n')
+    : '  (데이터 없음)';
+  return `${title} (${periodText})\n${lines}`;
 }
 
-function formatKrw(n) {
-  return Number(n).toLocaleString('ko-KR');
-}
-
-function fxBlock(fx) {
-  if (!fx || !fx.ok || !fx.rate) {
-    return `💱 <b>환율</b>\n조회 실패${fx?.message ? ` (${fx.message})` : ''}\n\n`;
+function formatHoldings(balance) {
+  if (!balance || !balance.positions || !balance.positions.length) {
+    return '📦 보유 종목\n  없음';
   }
-  const sign = fx.change > 0 ? '+' : '';
-  return (
-    `💱 <b>환율 USD/KRW</b>\n` +
-    `오늘 <code>${formatFx(fx.rate)}</code>` +
-    (fx.prev ? `  (전일 ${formatFx(fx.prev)})` : '') +
-    (fx.change != null ? `\n변동 ${sign}${formatFx(fx.change)}` : '') +
-    (fx.changePct != null ? ` (${sign}${fx.changePct}%)` : '') +
-    `\n\n`
-  );
+  const lines = balance.positions.map((p) => {
+    const pnl = p.pnl != null ? fmtPct(p.returnPct) : '';
+    return `  ${p.ticker} ${p.qty}주 · 평가 ${Number(p.evalAmount || 0).toLocaleString()} · ${pnl}`;
+  });
+  return `📦 보유 종목\n${lines.join('\n')}`;
 }
 
-function dcaBlock() {
-  const tickers = CONFIG.tickers || {};
-  const keys = Object.keys(tickers);
-  if (keys.length === 0) return '';
-  let total = 0;
-  let lines = `💵 <b>정액매수 (일일)</b>\n`;
-  for (const t of keys) {
-    const amt = tickers[t].dailyBuy || 0;
-    total += amt;
-    lines += `├ ${t}  <code>${formatKrw(amt)}원</code>\n`;
+function formatCash(balance, fx) {
+  const krw = balance?.cashKrw != null ? Number(balance.cashKrw).toLocaleString() : '-';
+  const usd = balance?.cashUsd != null ? Number(balance.cashUsd).toLocaleString() : '-';
+  const rate =
+    fx && fx.rate != null
+      ? `${fx.rate} (전일대비 ${fx.changePct != null ? fmtPct(fx.changePct) : '-'})`
+      : '-';
+  return `💵 현금·환율\n  원화: ${krw}\n  달러: ${usd}\n  환율: ${rate}`;
+}
+
+async function fetchAllBars(token) {
+  const map = {};
+  for (const item of CONFIG.WATCH_LIST) {
+    try {
+      const bars = await kis.fetchDailyBars(token, item.ticker, item.excd || 'NAS');
+      // bars: [{ date:'YYYYMMDD', close, volume, amount? }, ...]
+      map[item.ticker] = bars || [];
+    } catch (e) {
+      console.error('bars fail', item.ticker, e.message);
+      map[item.ticker] = [];
+    }
+    await sleep(CONFIG.API_GAP_MS);
   }
-  lines += `└ 합계  <code>${formatKrw(total)}원</code>\n\n`;
-  return lines;
+  return map;
+}
+
+function resolveAsOf(seriesMap) {
+  let maxD = null;
+  for (const bars of Object.values(seriesMap)) {
+    for (const b of bars || []) {
+      const d = parseYmd(b.date);
+      if (d && (!maxD || d > maxD)) maxD = d;
+    }
+  }
+  return maxD || new Date();
 }
 
 module.exports = async (req, res) => {
-  res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Content-Type', 'application/json');
-
   try {
-    const now = new Date();
-    const nowText = now.toLocaleString('ko-KR', {
-      timeZone: 'Asia/Seoul',
-      year: 'numeric',
-      month: '2-digit',
-      day: '2-digit',
-      hour: '2-digit',
-      minute: '2-digit'
+    const token = await kis.getAccessToken();
+
+    // 1) 환율
+    let fx = { rate: null, changePct: null };
+    try {
+      fx = await kis.fetchFx(token);
+    } catch (e) {
+      console.error('fx', e.message);
+    }
+    await sleep(CONFIG.API_GAP_MS);
+
+    // 2) 잔고·보유 (입출금/보유 유지)
+    let balance = { cashKrw: null, cashUsd: null, positions: [] };
+    try {
+      balance = await kis.fetchOverseasBalance(token);
+    } catch (e) {
+      console.error('balance', e.message);
+    }
+    await sleep(CONFIG.API_GAP_MS);
+
+    // 3) 일봉 → 순위
+    const seriesMap = await fetchAllBars(token);
+    const asOf = resolveAsOf(seriesMap);
+    const labels = periodLabels(asOf);
+    const ranks = buildRankings(seriesMap, labels);
+
+    // 4) 메시지 (매매 규칙·승인 버튼 없음)
+    const msg = [
+      `📋 한투 시세 리포트`,
+      `기준 거래일 근사: ${labels.day}`,
+      ``,
+      formatCash(balance, fx),
+      ``,
+      formatHoldings(balance),
+      ``,
+      `📊 미국 레버리지 수익률 TOP${CONFIG.RANK_TOP}`,
+      formatRankBlock('• 일', labels.day, ranks.returnRank.day),
+      formatRankBlock('• 주', labels.week, ranks.returnRank.week),
+      formatRankBlock('• 월', labels.month, ranks.returnRank.month),
+      formatRankBlock('• 연', labels.year, ranks.returnRank.year),
+      ``,
+      `💰 거래대금 증감 TOP${CONFIG.RANK_TOP}`,
+      formatRankBlock('• 일', labels.day, ranks.volumeRank.day),
+      formatRankBlock('• 주', labels.week, ranks.volumeRank.week),
+      formatRankBlock('• 월', labels.month, ranks.volumeRank.month),
+      formatRankBlock('• 연', labels.year, ranks.volumeRank.year),
+    ].join('\n');
+
+    if (typeof kis.sendTelegram === 'function') {
+      await kis.sendTelegram(msg);
+    }
+
+    res.status(200).json({
+      success: true,
+      labels: {
+        day: labels.day,
+        week: labels.week,
+        month: labels.month,
+        year: labels.year,
+      },
+      returnRank: ranks.returnRank,
+      volumeRank: ranks.volumeRank,
+      balanceSummary: {
+        cashKrw: balance.cashKrw,
+        cashUsd: balance.cashUsd,
+        positionCount: (balance.positions || []).length,
+      },
     });
-
-    if (shouldRemindHolidayUpdate(now)) {
-      const year = new Date(now.toLocaleString('en-US', { timeZone: 'Asia/Seoul' })).getFullYear();
-      await sendMessage(holidayReminderMessage(year));
-    }
-    if (shouldRemindQuarterly(now)) {
-      const { year, month } = getKstParts(now);
-      await sendMessage(quarterlyReminderMessage(year, month));
-    }
-
-    const appKey = process.env.KIS_API_KEY;
-    const appSecret = process.env.KIS_API_SECRET;
-    const accessToken = await getAccessToken(appKey, appSecret);
-
-    const fx = await getUsdKrwRate(accessToken);
-    const fxRate = fx?.rate || 0;
-    const balanceResult = await getRealPositions(accessToken);
-    const positions = balanceResult.positions || {};
-
-    try {
-      const changeMsg = await checkAndUpdateBalance(balanceResult);
-      if (changeMsg) await sendMessage(changeMsg);
-    } catch (e) {
-      console.error('balance-watch error:', e.message);
-    }
-
-    const tradingDay = isUsTradingDay(now);
-
-    let tickResult = { inflowOrders: [], settleOrders: [], lots: [] };
-    let started = [];
-
-    if (tradingDay) {
-      try {
-        tickResult = await tickHostedLots();
-      } catch (e) {
-        console.error('hosted tick error:', e.message);
-      }
-    } else {
-      try {
-        tickResult.lots = await getHostedLots();
-      } catch (e) {}
-    }
-
-    const hostPrices = {};
-    for (const t of Object.keys(positions)) {
-      hostPrices[t] = positions[t].currentPrice || positions[t].avgPrice || 0;
-    }
-
-    if (tradingDay) {
-      try {
-        started = await autoStartSettlements(hostPrices);
-        if (started.length) tickResult.lots = await getHostedLots();
-      } catch (e) {
-        console.error('auto settle error:', e.message);
-      }
-    }
-
-    const cashParking = await getCashParking();
-
-    let watchQuotes = [];
-    try {
-      watchQuotes = await getWatchQuotes(accessToken, appKey, appSecret);
-    } catch (e) {
-      console.error('watch error:', e.message);
-    }
-
-    const header =
-      `━━━━━━━━━━━━━━━━━━\n` +
-      `📈 <b>EVERIZING DAILY REPORT</b>\n` +
-      `━━━━━━━━━━━━━━━━━━\n\n` +
-      `🗓 <b>${nowText}</b>` +
-      (tradingDay ? `` : ` · <i>미국 휴장/주말 (대여랏 틱 없음)</i>`) +
-      `\n\n` +
-      fxBlock(fx);
-
-    const moneyFlow = formatMoneyFlowBlock(
-      tickResult.lots,
-      cashParking,
-      tickResult.inflowOrders,
-      tickResult.settleOrders,
-      started
-    );
-
-    if (Object.keys(positions).length === 0) {
-      let msg = header;
-      msg += `💼 <b>Portfolio Summary</b>\n📭 보유 종목 없음\n\n`;
-      msg += moneyFlow;
-      msg += dcaBlock();
-      msg += formatWatchBlock(watchQuotes, fxRate);
-      await sendMessage(msg);
-      return res.status(200).json({ success: true, message: '보유 종목 없음', fx, tradingDay });
-    }
-
-    const today = now.toISOString().slice(0, 10);
-    const tickers = Object.keys(positions);
-    const dailies = {};
-    const prices = {};
-    const armMap = {};
-    const holdingDaysMap = {};
-    const tradeCountMap = {};
-
-    for (const t of tickers) {
-      await ensureFirstBuyDate(t, today);
-      holdingDaysMap[t] = await getHoldingDays(t);
-      tradeCountMap[t] = await getTradeCounts(t);
-      const d = await getDailyIndicators(t, accessToken, appKey, appSecret);
-      dailies[t] = d;
-      const cur = d.lastClose || positions[t]?.currentPrice || 0;
-      prices[t] = { price: cur, prevClose: 0, change: 0 };
-      hostPrices[t] = cur || hostPrices[t];
-      armMap[t] = await updateArms(t, d, cur);
-      await new Promise(r => setTimeout(r, 800));
-    }
-
-    if (tradingDay) {
-      try {
-        const started2 = await autoStartSettlements(hostPrices);
-        if (started2.length) {
-          started = started2;
-          tickResult.lots = await getHostedLots();
-        }
-      } catch (e) {}
-    }
-
-    const evaluations = evaluateAll(positions, prices, dailies, armMap);
-    evaluations.sort((a, b) => (b.returnPct || 0) - (a.returnPct || 0));
-
-    let totalCost = 0;
-    let totalEval = 0;
-    for (const e of evaluations) {
-      totalCost += e.avgPrice * e.qty;
-      totalEval += e.current * e.qty;
-    }
-    const totalPnl = totalEval - totalCost;
-    const totalReturn = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
-
-    let msg = header;
-    msg += `💼 <b>Portfolio Summary</b>\n`;
-    msg += `├ 평가금액  <code>$${formatMoney(totalEval)}</code>\n`;
-    msg += `├ 투자원금  <code>$${formatMoney(totalCost)}</code>\n`;
-    msg += `├ 평가손익  <code>$${formatMoney(totalPnl)}</code>\n`;
-    msg += `└ 수익률    <b>${totalReturn >= 0 ? '+' : ''}${totalReturn.toFixed(2)}%</b>\n\n`;
-
-    msg += `📋 <b>Positions (수익률순)</b>\n`;
-    for (const e of evaluations) {
-      const cost = e.avgPrice * e.qty;
-      const evalAmt = e.current * e.qty;
-      const pnl = evalAmt - cost;
-      const sign = e.returnPct >= 0 ? '+' : '';
-      const pnlSign = pnl >= 0 ? '+' : '';
-      const icon = e.signals.length ? '🔥' : (e.returnPct >= 0 ? '🟢' : '🔴');
-      const days = holdingDaysMap[e.ticker];
-      const tc = tradeCountMap[e.ticker];
-      const arm = e.arm || {};
-      msg += `${icon} <b>${e.ticker}</b>  ${sign}${e.returnPct}%\n`;
-      msg += `    평단 $${formatMoney(e.avgPrice)} → 현재 $${formatMoney(e.current)} | ${e.qty}주\n`;
-      msg += `    평가 <code>$${formatMoney(evalAmt)}</code> / 원금 <code>$${formatMoney(cost)}</code>\n`;
-      msg += `    손익 <code>${pnlSign}$${formatMoney(Math.abs(pnl))}</code>`;
-      if (days != null) msg += ` · 투자 ${days}일`;
-      if (tc && tc.total > 0) msg += ` · 매매 ${tc.total}회`;
-      msg += `\n`;
-      msg += `    무장 손절:${arm.stopArmed ? 'ON' : 'OFF'} ATH:${arm.athArmed ? 'ON' : 'OFF'}`;
-      if (arm.below240Days) msg += ` · 240하회 ${arm.below240Days}일`;
-      msg += `\n`;
-    }
-    msg += `\n`;
-
-    msg += formatMoneyFlowBlock(
-      tickResult.lots,
-      cashParking,
-      tickResult.inflowOrders,
-      tickResult.settleOrders,
-      started
-    );
-
-    const actionList = evaluations.filter(e => e.primary);
-    if (actionList.length > 0) {
-      msg += `🚨 <b>ACTION REQUIRED</b> (우선: 규칙3→1/2→4)\n`;
-      for (const e of actionList) {
-        const s = e.primary;
-        msg += `• <b>${e.ticker}</b>: ${s.message}\n`;
-        if (s.type === 'RULE4_ATH_TRAIL') {
-          try {
-            const proceeds = e.current * e.qty;
-            const hostedMap = await hostedPrincipalByHost();
-            const posForWf = {};
-            for (const t of Object.keys(positions)) {
-              posForWf[t] = {
-                qty: positions[t].qty,
-                avgPrice: positions[t].avgPrice,
-                currentPrice: prices[t]?.price || positions[t].currentPrice
-              };
-            }
-            msg += formatWaterfillMessage(waterfill(e.ticker, proceeds, posForWf, hostedMap));
-          } catch (err) {}
-        }
-      }
-      msg += `\n`;
-    } else {
-      msg += `✨ <b>No Exit Signal</b>\n현재 조치할 신호가 없습니다.\n\n`;
-    }
-
-    msg += dcaBlock();
-    msg += formatWatchBlock(watchQuotes, fxRate);
-
-    if (actionList.length > 0) {
-      const buttons = actionList.map(e => {
-        const ruleType = e.primary?.type || 'UNKNOWN';
-        const short =
-          ruleType.includes('BREAK') ? '손절3' :
-          ruleType.includes('RULE2') ? '익절2' :
-          ruleType.includes('RULE1') ? '익절1' :
-          ruleType.includes('ATH') ? 'ATH4' : '승인';
-        return [{
-          text: `✅ ${e.ticker} ${short}`,
-          callback_data: `approve:${e.ticker}:${ruleType}`
-        }];
-      });
-      buttons.push([{ text: '⏸ 전체 보류', callback_data: 'hold:all' }]);
-      await sendMessageWithButtons(msg, buttons);
-    } else {
-      await sendMessage(msg);
-    }
-
-    return res.status(200).json({ success: true, fx, evaluations, tradingDay, started });
-  } catch (error) {
-    console.error('daily-signal 오류:', error.message);
-    try { await sendMessage(`❌ <b>Everizing Error</b>\n\n${error.message}`); } catch (e) {}
-    return res.status(500).json({ success: false, error: error.message });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ success: false, error: e.message });
   }
 };
