@@ -1,5 +1,5 @@
 /**
- * 한투 봇 — 시세·잔고·3배 순위 + 종목 카드 버튼
+ * 한투 봇 — 시세·잔고·순위(가격/원화) + 종목 버튼
  */
 const https = require('https');
 const CONFIG = require('../lib/config');
@@ -18,16 +18,52 @@ function fmtPct(v) {
   return (v >= 0 ? `+${v}` : `${v}`) + '%';
 }
 
-function formatRankBlock(title, periodText, list) {
-  const lines = list.length
-    ? list
-        .map(
-          (x) =>
-            `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`
-        )
-        .join('\n')
-    : '  (데이터 없음)';
-  return `${title} (${periodText})\n${lines}`;
+function fmtUsd(v) {
+  if (v == null || Number.isNaN(v)) return '-';
+  return '$' + Number(v).toFixed(2);
+}
+
+function fmtUsdDiff(v) {
+  if (v == null || Number.isNaN(v)) return '-';
+  const sign = v >= 0 ? '+' : '';
+  return sign + '$' + Number(v).toFixed(2);
+}
+
+/** USD 거래대금 → 읽기 쉬운 원화 */
+function fmtKrwFromUsd(usd, fx) {
+  if (usd == null || !fx || !(fx > 0)) return '-';
+  const krw = Number(usd) * fx;
+  const abs = Math.abs(krw);
+  const sign = krw < 0 ? '-' : '';
+  if (abs >= 1e12) return sign + (abs / 1e12).toFixed(2) + '조원';
+  if (abs >= 1e8) return sign + (abs / 1e8).toFixed(1) + '억';
+  if (abs >= 1e4) return sign + Math.round(abs / 1e4) + '만원';
+  return sign + Math.round(abs).toLocaleString('ko-KR') + '원';
+}
+
+function formatReturnBlock(title, periodText, list) {
+  if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
+  const lines = list.map((x) => {
+    const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
+    const sub =
+      x.price0 != null && x.price1 != null
+        ? `\n     ${fmtUsd(x.price0)}→${fmtUsd(x.price1)} (${fmtUsdDiff(x.priceDiff)})`
+        : '';
+    return main + sub;
+  });
+  return `${title} (${periodText})\n${lines.join('\n')}`;
+}
+
+function formatVolumeBlock(title, periodText, list, fxRate) {
+  if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
+  const lines = list.map((x) => {
+    const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
+    const periodKrw = fmtKrwFromUsd(x.amtSum, fxRate);
+    const diffKrw = fmtKrwFromUsd(x.amtDiff, fxRate);
+    const sub = `\n     기간 ${periodKrw} · 증감 ${diffKrw}`;
+    return main + sub;
+  });
+  return `${title} (${periodText})\n${lines.join('\n')}`;
 }
 
 function formatHoldings(positions) {
@@ -188,6 +224,7 @@ module.exports = async (req, res) => {
     const token = await getAccessToken();
 
     const fx = await getUsdKrwRate(token);
+    const fxRate = fx && fx.rate > 0 ? fx.rate : null;
     await sleep(CONFIG.API_GAP_MS || 350);
 
     let positions = {};
@@ -215,16 +252,16 @@ module.exports = async (req, res) => {
       formatHoldings(positions),
       ``,
       `미국 레버리지 수익률 TOP${topN}`,
-      formatRankBlock('일', labels.day, ranks.returnRank.day),
-      formatRankBlock('주', labels.week, ranks.returnRank.week),
-      formatRankBlock('월', labels.month, ranks.returnRank.month),
-      formatRankBlock('연', labels.year, ranks.returnRank.year),
+      formatReturnBlock('일', labels.day, ranks.returnRank.day),
+      formatReturnBlock('주', labels.week, ranks.returnRank.week),
+      formatReturnBlock('월', labels.month, ranks.returnRank.month),
+      formatReturnBlock('연', labels.year, ranks.returnRank.year),
       ``,
       `거래대금 증감 TOP${topN}`,
-      formatRankBlock('일', labels.day, ranks.volumeRank.day),
-      formatRankBlock('주', labels.week, ranks.volumeRank.week),
-      formatRankBlock('월', labels.month, ranks.volumeRank.month),
-      formatRankBlock('연', labels.year, ranks.volumeRank.year),
+      formatVolumeBlock('일', labels.day, ranks.volumeRank.day, fxRate),
+      formatVolumeBlock('주', labels.week, ranks.volumeRank.week, fxRate),
+      formatVolumeBlock('월', labels.month, ranks.volumeRank.month, fxRate),
+      formatVolumeBlock('연', labels.year, ranks.volumeRank.year, fxRate),
     ].join('\n');
 
     let telegram = null;
@@ -246,17 +283,15 @@ module.exports = async (req, res) => {
       success: true,
       telegramOk: !telegramError,
       telegramError,
-      telegram,
       labels: {
         day: labels.day,
         week: labels.week,
         month: labels.month,
         year: labels.year,
       },
-      returnRank: ranks.returnRank,
-      volumeRank: ranks.volumeRank,
       positionCount: Object.keys(positions).length,
       fx: { rate: fx.rate, changePct: fx.changePct },
+      msgLength: msg.length,
     });
   } catch (e) {
     console.error(e);
