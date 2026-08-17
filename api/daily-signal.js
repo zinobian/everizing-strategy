@@ -1,7 +1,8 @@
 /**
  * 한투 봇 — 시세·순위
  * 본문: 🔵🟢🔴 + 순위 + 종목 + %
- * 보조: 증감>10% 🔥 / 하락<-10% 🌧️ / 그 외 ⭐ (동그라미 없음)
+ * 보조: >+10% 🔥 / <-10% 🌧️ / 그외 ⭐
+ * 가격: 한국어 달러 + 상승/하락
  */
 const https = require('https');
 const CONFIG = require('../lib/config');
@@ -31,14 +32,14 @@ function subLineMark(pct) {
 
 function fmtDollar(v) {
   if (v == null || Number.isNaN(v)) return '-';
-  return '$' + Number(v).toFixed(2);
+  return Number(v).toFixed(2) + '달러';
 }
 
 function fmtDollarDiffKo(v) {
   if (v == null || Number.isNaN(v)) return '-';
-  if (v > 0) return '상승 +$' + Number(v).toFixed(2);
-  if (v < 0) return '하락 -$' + Math.abs(Number(v)).toFixed(2);
-  return '보합 $0.00';
+  if (v > 0) return '상승 +' + Number(v).toFixed(2) + '달러';
+  if (v < 0) return '하락 -' + Math.abs(Number(v)).toFixed(2) + '달러';
+  return '보합 0달러';
 }
 
 function fmtKrwFromUsd(usd, fx) {
