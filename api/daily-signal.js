@@ -1,5 +1,5 @@
 /**
- * 한투 봇 — 시세·잔고·순위(가격▲▼ / 대금◆◇) + 종목 버튼
+ * 한투 봇 — 시세·순위 (10%↑ 🎯 / 미만 ♨️, 가격 한국어 달러)
  */
 const https = require('https');
 const CONFIG = require('../lib/config');
@@ -18,15 +18,21 @@ function fmtPct(v) {
   return (v >= 0 ? `+${v}` : `${v}`) + '%';
 }
 
-function fmtUsd(v) {
-  if (v == null || Number.isNaN(v)) return '-';
-  return '$' + Number(v).toFixed(2);
+function magnitudeMark(pct) {
+  if (pct == null || Number.isNaN(pct)) return '♨️';
+  return Math.abs(Number(pct)) >= 10 ? '🎯' : '♨️';
 }
 
-function fmtUsdDiff(v) {
+function fmtDollarKo(v) {
   if (v == null || Number.isNaN(v)) return '-';
-  const sign = v >= 0 ? '+' : '';
-  return sign + '$' + Number(v).toFixed(2);
+  return Number(v).toFixed(2) + '달러';
+}
+
+function fmtDollarDiffKo(v) {
+  if (v == null || Number.isNaN(v)) return '-';
+  if (v > 0) return '상승 +' + Number(v).toFixed(2) + '달러';
+  if (v < 0) return '하락 ' + Number(v).toFixed(2) + '달러';
+  return '보합 0달러';
 }
 
 function fmtKrwFromUsd(usd, fx) {
@@ -43,11 +49,13 @@ function fmtKrwFromUsd(usd, fx) {
 function formatReturnBlock(title, periodText, list) {
   if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
-    const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
+    const mag = magnitudeMark(x.value);
+    const main = `  ${mag} ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
     if (x.price0 == null || x.price1 == null) return main;
     const mark =
-      x.priceDiff == null ? '→' : x.priceDiff > 0 ? '▲' : x.priceDiff < 0 ? '▼' : '→';
-    const sub = `\n     ${mark} ${fmtUsd(x.price0)}→${fmtUsd(x.price1)} (${fmtUsdDiff(x.priceDiff)})`;
+      x.priceDiff == null ? '⚪' : x.priceDiff > 0 ? '🔵' : x.priceDiff < 0 ? '🔴' : '⚪';
+    const sub =
+      `\n     ${mark} ${fmtDollarKo(x.price0)} → ${fmtDollarKo(x.price1)} (${fmtDollarDiffKo(x.priceDiff)})`;
     return main + sub;
   });
   return `${title} (${periodText})\n${lines.join('\n')}`;
@@ -56,12 +64,21 @@ function formatReturnBlock(title, periodText, list) {
 function formatVolumeBlock(title, periodText, list, fxRate) {
   if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
-    const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
+    const mag = magnitudeMark(x.value);
+    const main = `  ${mag} ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
     const mark =
-      x.amtDiff == null ? '◇' : x.amtDiff > 0 ? '◆' : x.amtDiff < 0 ? '◇' : '◇';
+      x.amtDiff == null ? '⚪' : x.amtDiff > 0 ? '🟢' : x.amtDiff < 0 ? '🔴' : '⚪';
     const periodKrw = fmtKrwFromUsd(x.amtSum, fxRate);
-    const diffKrw = fmtKrwFromUsd(x.amtDiff, fxRate);
-    const sub = `\n     ${mark} 기간 ${periodKrw} · 증감 ${diffKrw}`;
+    const absDiff = x.amtDiff == null ? null : Math.abs(x.amtDiff);
+    const diffLabel =
+      x.amtDiff == null
+        ? '-'
+        : x.amtDiff > 0
+          ? '증가 ' + fmtKrwFromUsd(absDiff, fxRate)
+          : x.amtDiff < 0
+            ? '감소 ' + fmtKrwFromUsd(absDiff, fxRate)
+            : '보합';
+    const sub = `\n     ${mark} 기간 ${periodKrw} · ${diffLabel}`;
     return main + sub;
   });
   return `${title} (${periodText})\n${lines.join('\n')}`;
@@ -246,8 +263,9 @@ module.exports = async (req, res) => {
     const msg = [
       `한투 시세 리포트`,
       `기준: ${labels.day}`,
-      `색: 🔵일주월 모두+  🟢혼재  🔴해당-`,
-      `가격 ▲상승 ▼하락 · 대금 ◆증가 ◇감소`,
+      `크기: 🎯|증감|≥10%  ♨️|증감|<10%`,
+      `종목색: 🔵일주월+  🟢혼재  🔴해당-`,
+      `가격: 🔵상승 🔴하락 · 대금: 🟢증가 🔴감소`,
       ``,
       formatCash(fx),
       ``,
