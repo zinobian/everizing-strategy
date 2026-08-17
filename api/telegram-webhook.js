@@ -1,8 +1,7 @@
 /**
  * 텔레그램 웹훅
- * approve:TICKER:RULE_TYPE
+ * etf:TICKER | approve:TICKER:RULE | /port
  */
-
 const { sendMessage } = require('../lib/telegram');
 const { sellOverseas } = require('../lib/order');
 const { getRealPositions } = require('../lib/balance');
@@ -14,18 +13,19 @@ const { waterfill, formatWaterfillMessage } = require('../lib/waterfill');
 const { createHostedLotsFromWaterfill, hostedPrincipalByHost } = require('../lib/hosted-lots');
 const { disarmStop, disarmAth } = require('../lib/arming');
 const CONFIG = require('../lib/config');
+const { formatProfile } = require('../lib/etf-profiles');
 
 function formatMoney(n) {
   return Number(n).toLocaleString('en-US', {
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    maximumFractionDigits: 2,
   });
 }
 
 function formatFx(n) {
   return Number(n).toLocaleString('ko-KR', {
     minimumFractionDigits: 2,
-    maximumFractionDigits: 2
+    maximumFractionDigits: 2,
   });
 }
 
@@ -37,7 +37,7 @@ async function buildPortfolioMessage() {
     if (fx.ok && fx.rate) {
       const sign = fx.change > 0 ? '+' : '';
       fxLine =
-        `💱 환율 <code>${formatFx(fx.rate)}</code>` +
+        `환율 ${formatFx(fx.rate)}` +
         (fx.change != null ? ` (${sign}${formatFx(fx.change)})` : '') +
         `\n\n`;
     }
@@ -47,13 +47,13 @@ async function buildPortfolioMessage() {
   try {
     balance = await getRealPositions(accessToken);
   } catch (e) {
-    return `❌ 잔고 조회 실패\n${e.message}`;
+    return `잔고 조회 실패\n${e.message}`;
   }
 
   const positions = balance.positions || {};
   const tickers = Object.keys(positions);
   if (tickers.length === 0) {
-    return `💼 <b>Portfolio</b>\n\n${fxLine}📭 보유 종목 없음\n한투 계좌에 주식이 없습니다.`;
+    return `Portfolio\n\n${fxLine}보유 종목 없음`;
   }
 
   let totalCost = 0;
@@ -76,19 +76,14 @@ async function buildPortfolioMessage() {
   const totalPnl = totalEval - totalCost;
   const totalRet = totalCost > 0 ? (totalPnl / totalCost) * 100 : 0;
 
-  let msg = `💼 <b>Portfolio</b>\n\n` + fxLine;
-  msg += `평가 <code>$${formatMoney(totalEval)}</code>\n`;
-  msg += `원금 <code>$${formatMoney(totalCost)}</code>\n`;
-  msg += `손익 <code>$${formatMoney(totalPnl)}</code>  (${totalRet >= 0 ? '+' : ''}${totalRet.toFixed(2)}%)\n\n`;
-  msg += `📋 <b>종목 (수익률순)</b>\n`;
+  let msg = `Portfolio\n\n` + fxLine;
+  msg += `평가 $${formatMoney(totalEval)}\n`;
+  msg += `원금 $${formatMoney(totalCost)}\n`;
+  msg += `손익 $${formatMoney(totalPnl)} (${totalRet >= 0 ? '+' : ''}${totalRet.toFixed(2)}%)\n\n`;
   for (const r of rows) {
-    const icon = r.ret >= 0 ? '🟢' : '🔴';
     const sign = r.ret >= 0 ? '+' : '';
-    msg += `${icon} <b>${r.t}</b>  ${sign}${r.ret.toFixed(2)}%\n`;
-    msg += `   평단 $${formatMoney(r.avg)} → $${formatMoney(r.cur)} | ${r.qty}주\n`;
-    msg += `   평가 $${formatMoney(r.evalAmt)} / 손익 $${formatMoney(r.pnl)}\n`;
+    msg += `${r.t} ${sign}${r.ret.toFixed(2)}% | ${r.qty}주\n`;
   }
-  msg += `\n⏰ ${new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })}`;
   return msg;
 }
 
@@ -96,9 +91,14 @@ function isPortCommand(text) {
   if (!text) return false;
   const t = text.trim().toLowerCase();
   return (
-    t === '/port' || t === '/portfolio' || t === '/status' ||
-    t === '포트' || t === '포트폴리오' || t === '잔고' ||
-    t.startsWith('/port@') || t.startsWith('/status@')
+    t === '/port' ||
+    t === '/portfolio' ||
+    t === '/status' ||
+    t === '포트' ||
+    t === '포트폴리오' ||
+    t === '잔고' ||
+    t.startsWith('/port@') ||
+    t.startsWith('/status@')
   );
 }
 
@@ -116,12 +116,30 @@ module.exports = async (req, res) => {
       return res.status(200).json({ ok: true, handled: 'port' });
     }
 
+    // /etf TQQQ 또는 TQQQ
+    if (message && message.text) {
+      const raw = message.text.trim();
+      const m = raw.match(/^\/etf(?:@\w+)?\s+(\w+)/i) || raw.match(/^([A-Za-z]{2,5})$/);
+      if (m) {
+        await sendMessage(formatProfile(m[1]));
+        return res.status(200).json({ ok: true, handled: 'etf-text' });
+      }
+    }
+
     if (!callback) {
       return res.status(200).json({ ok: true, ignored: true });
     }
 
     const data = callback.data || '';
     const from = callback.from?.first_name || 'User';
+
+    // 종목 카드 버튼
+    if (data.startsWith('etf:')) {
+      const ticker = data.split(':')[1];
+      await sendMessage(formatProfile(ticker));
+      return res.status(200).json({ ok: true, handled: data });
+    }
+
     let reply = '';
 
     if (data.startsWith('approve:')) {
@@ -147,9 +165,11 @@ module.exports = async (req, res) => {
       }
 
       if (qty <= 0) {
-        reply = `⚠️ <b>${from}</b> 님, <b>${ticker}</b> 보유 수량이 없어 매도할 수 없습니다.`;
+        reply = `${from} 님, ${ticker} 보유 수량이 없어 매도할 수 없습니다.`;
       } else {
-        const excd = CONFIG.tickers[ticker]?.excd || 'NAS';
+        const excd =
+          (CONFIG.WATCH_LIST || []).find((x) => x.ticker === ticker)?.excd ||
+          'NAS';
         const result = await sellOverseas({ ticker, qty, excd, dryRun: false });
 
         let fxLine = '';
@@ -158,8 +178,8 @@ module.exports = async (req, res) => {
           if (fx.ok && fx.rate) {
             const krwApprox = (currentPrice || avgPrice) * qty * fx.rate;
             fxLine =
-              `\n💱 환율 <code>${formatFx(fx.rate)}</code>\n` +
-              `   대략 <code>${Math.round(krwApprox).toLocaleString('ko-KR')}원</code>\n`;
+              `\n환율 ${formatFx(fx.rate)}\n` +
+              `대략 ${Math.round(krwApprox).toLocaleString('ko-KR')}원\n`;
           }
         } catch (e) {}
 
@@ -173,14 +193,14 @@ module.exports = async (req, res) => {
               side: 'sell',
               qty,
               price: currentPrice || avgPrice,
-              note: result.message || '실매도'
+              note: result.message || '실매도',
             });
           } catch (e) {}
 
           reply =
-            `✅ <b>${from}</b> · <b>${ticker}</b> 매도 주문\n` +
-            `규칙: <code>${ruleType}</code>\n` +
-            `📦 ${qty}주 · ${result.message || '완료'}\n` +
+            `${from} · ${ticker} 매도 주문\n` +
+            `규칙: ${ruleType}\n` +
+            `${qty}주 · ${result.message || '완료'}\n` +
             fxLine;
 
           if (isRule4) {
@@ -193,37 +213,43 @@ module.exports = async (req, res) => {
               }
               await createHostedLotsFromWaterfill(wf, undefined, hostPrices);
               reply += formatWaterfillMessage(wf);
-              reply += `\n📌 매일 정액매수는 그대로 유지하세요.\n`;
+              reply += `\n매일 정액매수는 그대로 유지하세요.\n`;
             } catch (e) {
-              reply += `\n⚠️ 워터필 기록 오류: ${e.message}\n`;
+              reply += `\n워터필 기록 오류: ${e.message}\n`;
             }
-            try { await disarmAth(ticker); } catch (e) {}
+            try {
+              await disarmAth(ticker);
+            } catch (e) {}
           } else {
             const plan = buildReinvestPlan(proceeds, CONFIG.rules?.reinvestDays || 15);
             reply += formatReinvestMessage(ticker, plan);
-            reply += `\n📌 매일 정액매수는 그대로 유지 + 위 15일 분할을 추가하세요.\n`;
+            reply += `\n매일 정액매수 유지 + 15일 분할 추가\n`;
             if (isRule3) {
-              try { await disarmStop(ticker); } catch (e) {}
+              try {
+                await disarmStop(ticker);
+              } catch (e) {}
             }
           }
         } else {
           reply =
-            `❌ <b>${ticker}</b> 매도 실패\n` +
+            `${ticker} 매도 실패\n` +
             `${result.message || JSON.stringify(result.raw || result)}\n` +
             fxLine;
         }
       }
     } else if (data === 'hold:all') {
-      reply = `⏸ <b>${from}</b> 님이 전체 보류를 선택했습니다.`;
+      reply = `${from} 님이 전체 보류를 선택했습니다.`;
     } else {
-      reply = `알 수 없는 선택: <code>${data}</code>`;
+      reply = `알 수 없는 선택: ${data}`;
     }
 
     await sendMessage(reply);
     return res.status(200).json({ ok: true, handled: data });
   } catch (error) {
     console.error('webhook error:', error.message);
-    try { await sendMessage(`❌ 웹훅 오류\n${error.message}`); } catch (e) {}
+    try {
+      await sendMessage(`웹훅 오류\n${error.message}`);
+    } catch (e) {}
     return res.status(200).json({ ok: false, error: error.message });
   }
 };
