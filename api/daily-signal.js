@@ -1,5 +1,5 @@
 /**
- * 한투 봇 — 시세·잔고·순위(가격/원화) + 종목 버튼
+ * 한투 봇 — 시세·잔고·순위(가격▲▼ / 대금◆◇) + 종목 버튼
  */
 const https = require('https');
 const CONFIG = require('../lib/config');
@@ -29,7 +29,6 @@ function fmtUsdDiff(v) {
   return sign + '$' + Number(v).toFixed(2);
 }
 
-/** USD 거래대금 → 읽기 쉬운 원화 */
 function fmtKrwFromUsd(usd, fx) {
   if (usd == null || !fx || !(fx > 0)) return '-';
   const krw = Number(usd) * fx;
@@ -45,10 +44,10 @@ function formatReturnBlock(title, periodText, list) {
   if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
     const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
-    const sub =
-      x.price0 != null && x.price1 != null
-        ? `\n     ${fmtUsd(x.price0)}→${fmtUsd(x.price1)} (${fmtUsdDiff(x.priceDiff)})`
-        : '';
+    if (x.price0 == null || x.price1 == null) return main;
+    const mark =
+      x.priceDiff == null ? '→' : x.priceDiff > 0 ? '▲' : x.priceDiff < 0 ? '▼' : '→';
+    const sub = `\n     ${mark} ${fmtUsd(x.price0)}→${fmtUsd(x.price1)} (${fmtUsdDiff(x.priceDiff)})`;
     return main + sub;
   });
   return `${title} (${periodText})\n${lines.join('\n')}`;
@@ -58,9 +57,11 @@ function formatVolumeBlock(title, periodText, list, fxRate) {
   if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
     const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
+    const mark =
+      x.amtDiff == null ? '◇' : x.amtDiff > 0 ? '◆' : x.amtDiff < 0 ? '◇' : '◇';
     const periodKrw = fmtKrwFromUsd(x.amtSum, fxRate);
     const diffKrw = fmtKrwFromUsd(x.amtDiff, fxRate);
-    const sub = `\n     기간 ${periodKrw} · 증감 ${diffKrw}`;
+    const sub = `\n     ${mark} 기간 ${periodKrw} · 증감 ${diffKrw}`;
     return main + sub;
   });
   return `${title} (${periodText})\n${lines.join('\n')}`;
@@ -245,7 +246,8 @@ module.exports = async (req, res) => {
     const msg = [
       `한투 시세 리포트`,
       `기준: ${labels.day}`,
-      `색: 🔵일주월 모두+  🟢혼재  🔴해당구간- 또는 모두-`,
+      `색: 🔵일주월 모두+  🟢혼재  🔴해당-`,
+      `가격 ▲상승 ▼하락 · 대금 ◆증가 ◇감소`,
       ``,
       formatCash(fx),
       ``,
