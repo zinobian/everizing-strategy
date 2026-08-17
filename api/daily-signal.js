@@ -1,5 +1,7 @@
 /**
- * 한투 봇 — 시세·순위 (10%↑ 🎯 / 미만 ♨️, 가격 한국어 달러)
+ * 한투 봇 — 시세·순위
+ * 본문: 🔵🟢🔴 + 순위 + 종목 + %
+ * 보조: 증감>10% 🔥 / 하락<-10% 🌧️ / 그 외 ⭐ (동그라미 없음)
  */
 const https = require('https');
 const CONFIG = require('../lib/config');
@@ -18,21 +20,25 @@ function fmtPct(v) {
   return (v >= 0 ? `+${v}` : `${v}`) + '%';
 }
 
-function magnitudeMark(pct) {
-  if (pct == null || Number.isNaN(pct)) return '♨️';
-  return Math.abs(Number(pct)) >= 10 ? '🎯' : '♨️';
+/** 보조줄: +10% 초과 🔥, -10% 미만 🌧️, 나머지 ⭐ */
+function subLineMark(pct) {
+  if (pct == null || Number.isNaN(pct)) return '⭐';
+  const n = Number(pct);
+  if (n > 10) return '🔥';
+  if (n < -10) return '🌧️';
+  return '⭐';
 }
 
-function fmtDollarKo(v) {
+function fmtDollar(v) {
   if (v == null || Number.isNaN(v)) return '-';
-  return Number(v).toFixed(2) + '달러';
+  return '$' + Number(v).toFixed(2);
 }
 
 function fmtDollarDiffKo(v) {
   if (v == null || Number.isNaN(v)) return '-';
-  if (v > 0) return '상승 +' + Number(v).toFixed(2) + '달러';
-  if (v < 0) return '하락 ' + Number(v).toFixed(2) + '달러';
-  return '보합 0달러';
+  if (v > 0) return '상승 +$' + Number(v).toFixed(2);
+  if (v < 0) return '하락 -$' + Math.abs(Number(v)).toFixed(2);
+  return '보합 $0.00';
 }
 
 function fmtKrwFromUsd(usd, fx) {
@@ -49,13 +55,11 @@ function fmtKrwFromUsd(usd, fx) {
 function formatReturnBlock(title, periodText, list) {
   if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
-    const mag = magnitudeMark(x.value);
-    const main = `  ${mag} ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
+    const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
     if (x.price0 == null || x.price1 == null) return main;
-    const mark =
-      x.priceDiff == null ? '⚪' : x.priceDiff > 0 ? '🔵' : x.priceDiff < 0 ? '🔴' : '⚪';
+    const mag = subLineMark(x.value);
     const sub =
-      `\n     ${mark} ${fmtDollarKo(x.price0)} → ${fmtDollarKo(x.price1)} (${fmtDollarDiffKo(x.priceDiff)})`;
+      `\n     ${mag} ${fmtDollar(x.price0)} → ${fmtDollar(x.price1)} (${fmtDollarDiffKo(x.priceDiff)})`;
     return main + sub;
   });
   return `${title} (${periodText})\n${lines.join('\n')}`;
@@ -64,10 +68,8 @@ function formatReturnBlock(title, periodText, list) {
 function formatVolumeBlock(title, periodText, list, fxRate) {
   if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
-    const mag = magnitudeMark(x.value);
-    const main = `  ${mag} ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
-    const mark =
-      x.amtDiff == null ? '⚪' : x.amtDiff > 0 ? '🟢' : x.amtDiff < 0 ? '🔴' : '⚪';
+    const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
+    const mag = subLineMark(x.value);
     const periodKrw = fmtKrwFromUsd(x.amtSum, fxRate);
     const absDiff = x.amtDiff == null ? null : Math.abs(x.amtDiff);
     const diffLabel =
@@ -78,7 +80,7 @@ function formatVolumeBlock(title, periodText, list, fxRate) {
           : x.amtDiff < 0
             ? '감소 ' + fmtKrwFromUsd(absDiff, fxRate)
             : '보합';
-    const sub = `\n     ${mark} 기간 ${periodKrw} · ${diffLabel}`;
+    const sub = `\n     ${mag} 기간 ${periodKrw} · ${diffLabel}`;
     return main + sub;
   });
   return `${title} (${periodText})\n${lines.join('\n')}`;
@@ -263,9 +265,8 @@ module.exports = async (req, res) => {
     const msg = [
       `한투 시세 리포트`,
       `기준: ${labels.day}`,
-      `크기: 🎯|증감|≥10%  ♨️|증감|<10%`,
-      `종목색: 🔵일주월+  🟢혼재  🔴해당-`,
-      `가격: 🔵상승 🔴하락 · 대금: 🟢증가 🔴감소`,
+      `본문: 🔵일주월+  🟢혼재  🔴해당-`,
+      `보조: 🔥증감>10%  🌧️하락<-10%  ⭐그외`,
       ``,
       formatCash(fx),
       ``,
