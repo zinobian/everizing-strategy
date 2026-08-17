@@ -19,7 +19,12 @@ function fmtPct(v) {
 
 function formatRankBlock(title, periodText, list) {
   const lines = list.length
-    ? list.map((x) => `  ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`).join('\n')
+    ? list
+        .map(
+          (x) =>
+            `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`
+        )
+        .join('\n')
     : '  (데이터 없음)';
   return `${title} (${periodText})\n${lines}`;
 }
@@ -123,7 +128,9 @@ async function fetchDailyBars(token, ticker, excd) {
 
   const map = {};
   for (const d of all) map[d.date] = d;
-  return Object.values(map).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+  return Object.values(map).sort((a, b) =>
+    String(a.date).localeCompare(String(b.date))
+  );
 }
 
 async function fetchAllBars(token) {
@@ -156,7 +163,6 @@ function resolveAsOf(seriesMap) {
   return maxD || new Date();
 }
 
-/** 텔레그램 4096자 제한 → 나눠 전송 */
 async function sendTelegramSafe(text) {
   const MAX = 3500;
   const chunks = [];
@@ -169,7 +175,6 @@ async function sendTelegramSafe(text) {
       rest = rest.slice(MAX);
     }
   }
-
   const results = [];
   for (const chunk of chunks) {
     const r = await sendMessage(chunk);
@@ -205,6 +210,7 @@ module.exports = async (req, res) => {
     const msg = [
       `한투 시세 리포트`,
       `기준: ${labels.day}`,
+      `색: 🔵일주월 모두+  🟢혼재  🔴해당구간- 또는 모두-`,
       ``,
       formatCash(fx),
       ``,
