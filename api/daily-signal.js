@@ -1,5 +1,5 @@
 /**
- * 한투 봇 — 시세·잔고·3배 순위 전용 (에버라이징 매매 규칙 없음)
+ * 한투 봇 — 시세·잔고·3배 순위 + 종목 카드 버튼
  */
 const https = require('https');
 const CONFIG = require('../lib/config');
@@ -8,7 +8,8 @@ const { buildRankings } = require('../lib/rankings');
 const { getAccessToken } = require('../lib/kis-token');
 const { getUsdKrwRate } = require('../lib/fx');
 const { getRealPositions } = require('../lib/balance');
-const { sendMessage } = require('../lib/telegram');
+const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
+const { buildEtfButtonRows } = require('../lib/etf-profiles');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -135,8 +136,7 @@ async function fetchDailyBars(token, ticker, excd) {
 
 async function fetchAllBars(token) {
   const seriesMap = {};
-  const list = CONFIG.WATCH_LIST || [];
-  for (const item of list) {
+  for (const item of CONFIG.WATCH_LIST || []) {
     try {
       seriesMap[item.ticker] = await fetchDailyBars(
         token,
@@ -166,9 +166,8 @@ function resolveAsOf(seriesMap) {
 async function sendTelegramSafe(text) {
   const MAX = 3500;
   const chunks = [];
-  if (text.length <= MAX) {
-    chunks.push(text);
-  } else {
+  if (text.length <= MAX) chunks.push(text);
+  else {
     let rest = text;
     while (rest.length > 0) {
       chunks.push(rest.slice(0, MAX));
@@ -177,8 +176,7 @@ async function sendTelegramSafe(text) {
   }
   const results = [];
   for (const chunk of chunks) {
-    const r = await sendMessage(chunk);
-    results.push(r);
+    results.push(await sendMessage(chunk));
     await sleep(300);
   }
   return results;
@@ -233,6 +231,12 @@ module.exports = async (req, res) => {
     let telegramError = null;
     try {
       telegram = await sendTelegramSafe(msg);
+      await sleep(400);
+      const tickers = (CONFIG.WATCH_LIST || []).map((x) => x.ticker);
+      await sendMessageWithButtons(
+        '종목 버튼을 누르면 섹터·성향·주요 익스포저를 볼 수 있습니다.',
+        buildEtfButtonRows(tickers)
+      );
     } catch (e) {
       telegramError = e.message;
       console.error('telegram', e.message);
@@ -253,7 +257,6 @@ module.exports = async (req, res) => {
       volumeRank: ranks.volumeRank,
       positionCount: Object.keys(positions).length,
       fx: { rate: fx.rate, changePct: fx.changePct },
-      msgLength: msg.length,
     });
   } catch (e) {
     console.error(e);
