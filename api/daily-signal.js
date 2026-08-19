@@ -2,7 +2,7 @@
  * 한투 봇 — 시세·순위
  * 본문: 🔵🟢🔴 + 순위 + 종목 + %
  * 보조: >+10% 🔥 / <-10% 🌧️ / 그외 ⭐
- * 가격: 한국어 달러 + 상승/하락
+ * 구간: ⏱️ + 빈 줄 2칸
  */
 const https = require('https');
 const CONFIG = require('../lib/config');
@@ -12,7 +12,7 @@ const { getAccessToken } = require('../lib/kis-token');
 const { getUsdKrwRate } = require('../lib/fx');
 const { getRealPositions } = require('../lib/balance');
 const { sendMessage, sendMessageWithButtons } = require('../lib/telegram');
-const { buildEtfButtonRows } = require('../lib/etf-profiles');
+const { ALL_3X_TICKERS, buildEtfButtonRows } = require('../lib/etf-profiles');
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
@@ -21,7 +21,6 @@ function fmtPct(v) {
   return (v >= 0 ? `+${v}` : `${v}`) + '%';
 }
 
-/** 보조줄: +10% 초과 🔥, -10% 미만 🌧️, 나머지 ⭐ */
 function subLineMark(pct) {
   if (pct == null || Number.isNaN(pct)) return '⭐';
   const n = Number(pct);
@@ -54,7 +53,7 @@ function fmtKrwFromUsd(usd, fx) {
 }
 
 function formatReturnBlock(title, periodText, list) {
-  if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
+  if (!list.length) return `⏱️ ${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
     const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
     if (x.price0 == null || x.price1 == null) return main;
@@ -63,11 +62,11 @@ function formatReturnBlock(title, periodText, list) {
       `\n     ${mag} ${fmtDollar(x.price0)} → ${fmtDollar(x.price1)} (${fmtDollarDiffKo(x.priceDiff)})`;
     return main + sub;
   });
-  return `${title} (${periodText})\n${lines.join('\n')}`;
+  return `⏱️ ${title} (${periodText})\n${lines.join('\n')}`;
 }
 
 function formatVolumeBlock(title, periodText, list, fxRate) {
-  if (!list.length) return `${title} (${periodText})\n  (데이터 없음)`;
+  if (!list.length) return `⏱️ ${title} (${periodText})\n  (데이터 없음)`;
   const lines = list.map((x) => {
     const main = `  ${x.emoji || '⚪'} ${x.rank}. ${x.ticker} ${fmtPct(x.value)}`;
     const mag = subLineMark(x.value);
@@ -84,7 +83,7 @@ function formatVolumeBlock(title, periodText, list, fxRate) {
     const sub = `\n     ${mag} 기간 ${periodKrw} · ${diffLabel}`;
     return main + sub;
   });
-  return `${title} (${periodText})\n${lines.join('\n')}`;
+  return `⏱️ ${title} (${periodText})\n${lines.join('\n')}`;
 }
 
 function formatHoldings(positions) {
@@ -274,27 +273,40 @@ module.exports = async (req, res) => {
       formatHoldings(positions),
       ``,
       `미국 레버리지 수익률 TOP${topN}`,
+      ``,
       formatReturnBlock('일', labels.day, ranks.returnRank.day),
+      ``,
+      ``,
       formatReturnBlock('주', labels.week, ranks.returnRank.week),
+      ``,
+      ``,
       formatReturnBlock('월', labels.month, ranks.returnRank.month),
+      ``,
+      ``,
       formatReturnBlock('연', labels.year, ranks.returnRank.year),
       ``,
+      ``,
       `거래대금 증감 TOP${topN}`,
+      ``,
       formatVolumeBlock('일', labels.day, ranks.volumeRank.day, fxRate),
+      ``,
+      ``,
       formatVolumeBlock('주', labels.week, ranks.volumeRank.week, fxRate),
+      ``,
+      ``,
       formatVolumeBlock('월', labels.month, ranks.volumeRank.month, fxRate),
+      ``,
+      ``,
       formatVolumeBlock('연', labels.year, ranks.volumeRank.year, fxRate),
     ].join('\n');
 
-    let telegram = null;
     let telegramError = null;
     try {
-      telegram = await sendTelegramSafe(msg);
+      await sendTelegramSafe(msg);
       await sleep(400);
-      const tickers = (CONFIG.WATCH_LIST || []).map((x) => x.ticker);
       await sendMessageWithButtons(
-        '종목 버튼을 누르면 섹터·성향·주요 익스포저를 볼 수 있습니다.',
-        buildEtfButtonRows(tickers)
+        '3배 레버리지 특징 확인\n종목 버튼을 누르면 섹터·성향·주요 익스포저를 볼 수 있습니다.',
+        buildEtfButtonRows(ALL_3X_TICKERS)
       );
     } catch (e) {
       telegramError = e.message;
